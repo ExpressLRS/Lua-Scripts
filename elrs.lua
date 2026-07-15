@@ -136,6 +136,13 @@ local function selectField(step)
   end
 end
 
+-- On firmwares that have constants defined for the arrow chars, use them in place of
+-- the \xc0 \xc1 chars (which are OpenTX-en)
+local charSubst = {
+  [192] = CHAR_UP or (__opentx and __opentx.CHAR_UP),
+  [193] = CHAR_DOWN or (__opentx and __opentx.CHAR_DOWN)
+}
+
 local function fieldGetStrOrOpts(data, offset, last, isOpts)
   -- For isOpts: Split a table of byte values (string) with ; separator into a table
   -- Else just read a string until the first null byte
@@ -154,13 +161,8 @@ local function fieldGetStrOrOpts(data, offset, last, isOpts)
           opt = ''
         end
       elseif b ~= 0 then
-        -- On firmwares that have constants defined for the arrow chars, use them in place of
-        -- the \xc0 \xc1 chars (which are OpenTX-en)
         -- Use the table to convert the char, else use string.char if not in the table
-        opt = opt .. (({
-          [192] = CHAR_UP or (__opentx and __opentx.CHAR_UP),
-          [193] = CHAR_DOWN or (__opentx and __opentx.CHAR_DOWN)
-        })[b] or string.char(b))
+        opt = opt .. (charSubst[b] or string.char(b))
       end
     end
   until b == 0
@@ -192,6 +194,10 @@ local function reloadCurField()
   loadQ[#loadQ+1] = field.id
 end
 
+local function crsfPush(cmd, third, fourth) -- send a 4-byte parameter read/write frame
+  crossfireTelemetryPush(cmd, { deviceId, handsetId, third, fourth })
+end
+
 -- UINT8/INT8/UINT16/INT16 + FLOAT + TEXTSELECT
 local function fieldUnsignedLoad(field, data, offset, size, unitoffset)
   field.value = fieldGetValue(data, offset, size)
@@ -205,17 +211,13 @@ local function fieldUnsignedLoad(field, data, offset, size, unitoffset)
   end
 end
 
-local function fieldUnsignedToSigned(field, size)
+local function fieldSignedLoad(field, data, offset, size, unitoffset)
+  fieldUnsignedLoad(field, data, offset, size, unitoffset)
   local bandval = bit32.lshift(0x80, (size-1)*8)
   field.value = field.value - bit32.band(field.value, bandval) * 2
   field.min = field.min - bit32.band(field.min, bandval) * 2
   field.max = field.max - bit32.band(field.max, bandval) * 2
   --field.default = field.default - bit32.band(field.default, bandval) * 2
-end
-
-local function fieldSignedLoad(field, data, offset, size, unitoffset)
-  fieldUnsignedLoad(field, data, offset, size, unitoffset)
-  fieldUnsignedToSigned(field, size)
   -- signed ints are INTdicated by a negative size
   field.size = -size
 end
@@ -346,7 +348,7 @@ local function fieldCommandSave(field)
   if field.status ~= nil then
     if field.status < 4 then
       field.status = 1
-      crossfireTelemetryPush(0x2D, { deviceId, handsetId, field.id, field.status })
+      crsfPush(0x2D, field.id, field.status)
       fieldPopup = field
       fieldPopup.lastStatus = 0
       fieldTimeout = getTime() + field.timeout
@@ -414,24 +416,26 @@ local function parseDeviceInfoMessage(data)
   end
 end
 
+local fieldInt = { load=fieldIntLoad, save=fieldIntSave, display=fieldIntDisplay }
+local fieldString = { load=fieldStringLoad, display=fieldStringDisplay } -- editing NOTIMPL
 local functions = {
-  { load=fieldIntLoad, save=fieldIntSave, display=fieldIntDisplay }, --1 UINT8(0)
-  { load=fieldIntLoad, save=fieldIntSave, display=fieldIntDisplay }, --2 INT8(1)
-  { load=fieldIntLoad, save=fieldIntSave, display=fieldIntDisplay }, --3 UINT16(2)
-  { load=fieldIntLoad, save=fieldIntSave, display=fieldIntDisplay }, --4 INT16(3)
+  fieldInt, --1 UINT8(0)
+  fieldInt, --2 INT8(1)
+  fieldInt, --3 UINT16(2)
+  fieldInt, --4 INT16(3)
   nil,
   nil,
   nil,
   nil,
   { load=fieldFloatLoad, save=fieldIntSave, display=fieldFloatDisplay },  --9 FLOAT(8)
-  { load=fieldTextSelLoad, save=fieldIntSave, display=nil }, --10 SELECT(9)
-  { load=fieldStringLoad, save=nil, display=fieldStringDisplay }, --11 STRING(10) editing NOTIMPL
-  { load=nil, save=fieldFolderOpen, display=fieldFolderDisplay }, --12 FOLDER(11)
-  { load=fieldStringLoad, save=nil, display=fieldStringDisplay }, --13 INFO(12)
+  { load=fieldTextSelLoad, save=fieldIntSave }, --10 SELECT(9) display set in setLCDvar
+  fieldString, --11 STRING(10)
+  { save=fieldFolderOpen, display=fieldFolderDisplay }, --12 FOLDER(11)
+  fieldString, --13 INFO(12)
   { load=fieldCommandLoad, save=fieldCommandSave, display=fieldCommandDisplay }, --14 COMMAND(13)
-  { load=nil, save=fieldBackExec, display=fieldCommandDisplay }, --15 back/exit(14)
-  { load=nil, save=fieldDeviceIdSelect, display=fieldCommandDisplay }, --16 device(15)
-  { load=nil, save=fieldFolderDeviceOpen, display=fieldFolderDisplay }, --17 deviceFOLDER(16)
+  { save=fieldBackExec, display=fieldCommandDisplay }, --15 back/exit(14)
+  { save=fieldDeviceIdSelect, display=fieldCommandDisplay }, --16 device(15)
+  { save=fieldFolderDeviceOpen, display=fieldFolderDisplay }, --17 deviceFOLDER(16)
 }
 
 local function parseParameterInfoMessage(data)
@@ -476,8 +480,9 @@ local function parseParameterInfoMessage(data)
       field.type = bit32.band(fieldData[offset+1], 0x7f)
       field.hidden = bit32.btest(fieldData[offset+1], 0x80) or nil
       field.name, offset = fieldGetStrOrOpts(fieldData, offset+2, field.name)
-      if functions[field.type+1].load then
-        functions[field.type+1].load(field, fieldData, offset)
+      local loadFn = functions[field.type+1].load
+      if loadFn then
+        loadFn(field, fieldData, offset)
       end
       if field.min == 0 then field.min = nil end
       if field.max == 0 then field.max = nil end
@@ -555,7 +560,7 @@ local function refreshNext(skipPush)
   local time = getTime()
   if fieldPopup then
     if time > fieldTimeout and fieldPopup.status ~= 3 then
-      crossfireTelemetryPush(0x2D, { deviceId, handsetId, fieldPopup.id, 6 }) -- lcsQuery
+      crsfPush(0x2D, fieldPopup.id, 6) -- lcsQuery
       fieldTimeout = time + fieldPopup.timeout
     end
   elseif time > devicesRefreshTimeout and #devices == 0 then
@@ -564,14 +569,14 @@ local function refreshNext(skipPush)
     crossfireTelemetryPush(0x28, { 0x00, 0xEA })
   elseif time > linkstatTimeout then
     if deviceIsELRS_TX then
-      crossfireTelemetryPush(0x2D, { deviceId, handsetId, 0x0, 0x0 }) --request linkstat
+      crsfPush(0x2D, 0x0, 0x0) --request linkstat
     else
       goodBadPkt = ""
     end
     linkstatTimeout = time + 100
   elseif time > fieldTimeout and fields_count ~= 0 then
     if #loadQ > 0 then
-      crossfireTelemetryPush(0x2C, { deviceId, handsetId, loadQ[#loadQ], fieldChunk })
+      crsfPush(0x2C, loadQ[#loadQ], fieldChunk)
       fieldTimeout = time + (deviceIsELRS_TX and 50 or 500) -- 0.5s for local / 5s for remote devices
     end
   end
@@ -616,10 +621,11 @@ local function lcd_title_color()
   -- progress bar
   if #loadQ > 0 and fields_count > 0 then
     local barW = (COL2-4) * (fields_count - #loadQ) / fields_count
+    local barY = barTextSpacing/2+textSize
     lcd.setColor(CUSTOM_COLOR, EBLUE)
-    lcd.drawFilledRectangle(2, barTextSpacing/2+textSize, barW, barTextSpacing, CUSTOM_COLOR)
+    lcd.drawFilledRectangle(2, barY, barW, barTextSpacing, CUSTOM_COLOR)
     lcd.setColor(CUSTOM_COLOR, WHITE)
-    lcd.drawFilledRectangle(2+barW, barTextSpacing/2+textSize, COL2-2-barW, barTextSpacing, CUSTOM_COLOR)
+    lcd.drawFilledRectangle(2+barW, barY, COL2-2-barW, barTextSpacing, CUSTOM_COLOR)
   end
 end
 
@@ -680,12 +686,9 @@ local function reloadRelatedFields(field)
 end
 
 local function handleDevicePageEvent(event)
-  if #fields == 0 then --if there is no field yet
+  -- No fields yet, or back button not assigned yet (also means there is no field yet)
+  if #fields == 0 or fields[#fields].name == nil then
     return
-  else
-    if fields[#fields].name == nil then --if back button is not assigned yet, means there is no field yet.
-      return
-    end
   end
 
   if event == EVT_VIRTUAL_EXIT then -- Cancel edit / go up a folder / reload all
@@ -707,7 +710,7 @@ local function handleDevicePageEvent(event)
   elseif event == EVT_VIRTUAL_ENTER then -- toggle editing/selecting current field
     if elrsFlags > 0x1F then
       elrsFlags = 0
-      crossfireTelemetryPush(0x2D, { deviceId, handsetId, 0x2E, 0x00 })
+      crsfPush(0x2D, 0x2E, 0x00)
     else
       local field = getField(lineIndex)
       if field and field.name then
@@ -719,8 +722,9 @@ local function handleDevicePageEvent(event)
           end
         end
         if not edit then
-          if functions[field.type+1].save then
-            functions[field.type+1].save(field)
+          local saveFn = functions[field.type+1].save
+          if saveFn then
+            saveFn(field)
           end
         end
       end
@@ -753,19 +757,22 @@ local function runDevicePage(event)
     lcd_warn()
   else
     for y = 1, maxLineIndex+1 do
-      local field = getField(pageOffset+y)
+      local li = pageOffset + y
+      local field = getField(li)
       if not field then
         break
       elseif field.name ~= nil then
-        local attr = lineIndex == (pageOffset+y)
+        local ypos = y*textSize+textYoffset
+        local attr = lineIndex == li
           and ((edit and BLINK or 0) + INVERS)
           or 0
         local color = field.grey and COLOR_THEME_DISABLED or 0
         if field.type < 11 or field.type == 12 then -- if not folder, command, or back
-          lcd.drawText(COL1, y*textSize+textYoffset, field.name, color)
+          lcd.drawText(COL1, ypos, field.name, color)
         end
-        if functions[field.type+1].display then
-          functions[field.type+1].display(field, y*textSize+textYoffset, attr, color)
+        local displayFn = functions[field.type+1].display
+        if displayFn then
+          displayFn(field, ypos, attr, color)
         end
       end
     end
@@ -779,32 +786,33 @@ end
 
 local function runPopupPage(event)
   if event == EVT_VIRTUAL_EXIT then
-    crossfireTelemetryPush(0x2D, { deviceId, handsetId, fieldPopup.id, 5 }) -- lcsCancel
+    crsfPush(0x2D, fieldPopup.id, 5) -- lcsCancel
     fieldTimeout = getTime() + 200 -- 2s
   end
 
-  if fieldPopup.status == 0 and fieldPopup.lastStatus ~= 0 then -- stopped
+  local status = fieldPopup.status
+  if status == 0 and fieldPopup.lastStatus ~= 0 then -- stopped
       popupCompat(fieldPopup.info, "Stopped!", event)
       reloadAllField()
       fieldPopup = nil
-  elseif fieldPopup.status == 3 then -- confirmation required
+  elseif status == 3 then -- confirmation required
     local result = popupCompat(fieldPopup.info, "PRESS [OK] to confirm", event)
-    fieldPopup.lastStatus = fieldPopup.status
+    fieldPopup.lastStatus = status
     if result == "OK" then
-      crossfireTelemetryPush(0x2D, { deviceId, handsetId, fieldPopup.id, 4 }) -- lcsConfirmed
+      crsfPush(0x2D, fieldPopup.id, 4) -- lcsConfirmed
       fieldTimeout = getTime() + fieldPopup.timeout -- we are expecting an immediate response
       fieldPopup.status = 4
     elseif result == "CANCEL" then
       fieldPopup = nil
     end
-  elseif fieldPopup.status == 2 then -- running
+  elseif status == 2 then -- running
     if fieldChunk == 0 then
       commandRunningIndicator = (commandRunningIndicator % 4) + 1
     end
     local result = popupCompat(fieldPopup.info .. " [" .. string.sub("|/-\\", commandRunningIndicator, commandRunningIndicator) .. "]", "Press [RTN] to exit", event)
-    fieldPopup.lastStatus = fieldPopup.status
+    fieldPopup.lastStatus = status
     if result == "CANCEL" then
-      crossfireTelemetryPush(0x2D, { deviceId, handsetId, fieldPopup.id, 5 }) -- lcsCancel
+      crsfPush(0x2D, fieldPopup.id, 5) -- lcsCancel
       fieldTimeout = getTime() + fieldPopup.timeout -- we are expecting an immediate response
       fieldPopup = nil
     end
@@ -826,33 +834,22 @@ end
 local function setLCDvar()
   -- Set the title function depending on if LCD is color, and free the other function and
   -- set textselection unit function, use GetLastPost or sizeText
-  if (lcd.RGB ~= nil) then
-    lcd_title = lcd_title_color
-    functions[10].display = fieldTextSelDisplay_color
-  else
-    lcd_title = lcd_title_bw
-    functions[10].display = fieldTextSelDisplay_bw
-    touch2evt = nil
-  end
-  lcd_title_color = nil
-  lcd_title_bw = nil
-  fieldTextSelDisplay_bw = nil
-  fieldTextSelDisplay_color = nil
   -- Determine if popupConfirmation takes 3 arguments or 2
   -- if pcall(popupConfirmation, "", "", EVT_VIRTUAL_EXIT) then
   -- major 1 is assumed to be FreedomTX
-  local _, _, major = getVersion()
+  local _, _, major, _, _, osname = getVersion()
   if major ~= 1 then
     popupCompat = popupConfirmation
   end
 
   if (lcd.RGB ~= nil) then
-    local ver, radio, maj, minor, rev, osname = getVersion()
+    lcd_title = lcd_title_color
+    functions[10].display = fieldTextSelDisplay_color
 
-    if osname ~= nil and osname == "EdgeTX" then
-      textWidth, textSize = lcd.sizeText("Qg") -- determine standard font height for EdgeTX
+    if osname == "EdgeTX" then
+      _, textSize = lcd.sizeText("Qg") -- determine standard font height for EdgeTX
     else
-      textSize = 21                            -- use this for OpenTX
+      textSize = 21                    -- use this for OpenTX
     end
 
     COL1 = 3
@@ -862,6 +859,9 @@ local function setLCDvar()
     textYoffset = 2 * barTextSpacing + 2
     maxLineIndex = math.floor(((LCD_H - barHeight - textYoffset) / textSize)) - 1
   else
+    lcd_title = lcd_title_bw
+    functions[10].display = fieldTextSelDisplay_bw
+    touch2evt = nil
     if LCD_W == 212 then
       COL2 = 110
     else
@@ -876,6 +876,10 @@ local function setLCDvar()
     textYoffset = 3
     textSize = 8
   end
+  lcd_title_color = nil
+  lcd_title_bw = nil
+  fieldTextSelDisplay_bw = nil
+  fieldTextSelDisplay_color = nil
 end
 
 local function setMock()
