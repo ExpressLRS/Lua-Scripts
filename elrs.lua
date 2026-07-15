@@ -387,6 +387,14 @@ local function changeDeviceId(devId) --change to selected device ID
   deviceIsELRS_TX = device.isElrs and devId == 0xEE or nil -- ELRS and ID is TX module
   handsetId = deviceIsELRS_TX and 0xEF or 0xEA -- Address ELRS_LUA vs RADIO_TRANSMITTER
 
+  if deviceIsELRS_TX then
+    -- Sync the backpack RTC to the handset date/time, using special
+    -- fieldId 0x3C which the module firmware handles directly
+    local dt = getDateTime()
+    crossfireTelemetryPush(0x2D, { deviceId, handsetId, 0x3C,
+      dt.year - 1900, dt.mon - 1, dt.day, dt.hour, dt.min, dt.sec })
+  end
+
   allocateFields()
   reloadAllField()
 end
