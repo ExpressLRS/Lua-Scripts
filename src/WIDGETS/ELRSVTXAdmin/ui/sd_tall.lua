@@ -35,8 +35,7 @@ WidgetUI.fonts = {
 -- ============================================================================
 
 local TopBarUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/topbar.lua")({
-  Protocol = Protocol,
-  VTX = VTX,
+  VTXDisplay = VTXDisplay,
 })
 
 --- 1/6: single row. Wide: band + detail + cheatsheet. Narrow: band + detail.
