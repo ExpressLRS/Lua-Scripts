@@ -42,7 +42,8 @@ VTX = {
     bandLetter = "?",
     channel = 0,
     power = 0,
-    pitmode = false,
+    pitmode = false, -- true only when pit mode is confirmed on
+    pitmodeAux = nil, -- switch name when pit mode is bound to an aux switch
   },
 
   -- Desired VTX state (edited by user in full-screen UI)
@@ -55,7 +56,11 @@ VTX = {
 }
 
 --- Parse "VTX Admin (R:4:2:P)" into VTX.state fields.
--- When band is Off, folder name has no dynamic suffix.
+-- ExpressLRS writes "VTX Admin (BAND:CHANNEL[:POWER[:PITMODE]])": band Off drops the whole
+-- suffix, power "-" drops both power and pit mode, pit mode Off drops itself. PITMODE is "P"
+-- when set to On, or the aux label ("AUX1\192".."AUX10\193", \192/\193 = up/down arrow) when
+-- bound to a switch. The name carries only the binding, never the switch position, so an aux
+-- binding sets pitmodeAux and leaves pitmode false.
 function VTX.parseFolderName(name)
   local s = VTX.state
   local content = string.match(name, "%((.+)%)")
@@ -65,6 +70,7 @@ function VTX.parseFolderName(name)
     s.channel = 0
     s.power = 0
     s.pitmode = false
+    s.pitmodeAux = nil
     return true
   end
 
@@ -80,7 +86,16 @@ function VTX.parseFolderName(name)
   s.band = VTX.BAND_VALUES[parts[1]] or 0
   s.channel = tonumber(parts[2]) or 0
   s.power = tonumber(parts[3]) or 0
-  s.pitmode = (parts[#parts] == "P")
+  if #parts < 4 then
+    s.pitmode = false
+    s.pitmodeAux = nil
+  elseif parts[4] == "P" then
+    s.pitmode = true
+    s.pitmodeAux = nil
+  else
+    s.pitmode = false
+    s.pitmodeAux = string.sub(parts[4], 1, -2)
+  end
   return true
 end
 
@@ -769,11 +784,19 @@ function VTXDisplay.powerLong()
   return VTX.state.power > 0 and table.concat({ "Power ", VTX.state.power }) or "Power -"
 end
 
+--- A switch binding names the switch rather than asserting a position the folder name
+--- does not carry.
 function VTXDisplay.pitText()
   if not VTX.isTuned() then
     return ""
   end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
+  if VTX.state.pitmode then
+    return "Pit Mode On"
+  end
+  if VTX.state.pitmodeAux then
+    return table.concat({ "Pit Mode ", VTX.state.pitmodeAux })
+  end
+  return "Pit Mode Off"
 end
 
 --- As pitText, but reports a disabled VTX instead of falling silent.

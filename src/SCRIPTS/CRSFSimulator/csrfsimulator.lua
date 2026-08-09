@@ -391,6 +391,17 @@ end
 -- Matches TXModuleParameters.cpp parameter structure
 -- ============================================================================
 
+--- STR_LUA_ALLAUX_UPDOWN from CRSFParameters.h: "AUX1<up>;AUX1<down>;...;AUX10<down>",
+--- where \192 and \193 are the ExpressLRS up/down arrow glyphs.
+local ALLAUX_UPDOWN = (function()
+  local opts = {}
+  for i = 1, 10 do
+    opts[#opts + 1] = table.concat({ "AUX", i, "\192" })
+    opts[#opts + 1] = table.concat({ "AUX", i, "\193" })
+  end
+  return table.concat(opts, ";")
+end)()
+
 local txDevice = {
   id = CRSF.ADDRESS_TX,
   name = "TX16S MK3",
@@ -501,7 +512,7 @@ local txDevice = {
       parent = 10,
       type = CRSF.TEXT_SELECTION,
       name = "Pitmode",
-      options = "Off;On",
+      options = table.concat({ "Off;On;", ALLAUX_UPDOWN }),
       value = 0,
       units = "",
     },
