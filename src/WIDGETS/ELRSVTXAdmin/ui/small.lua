@@ -25,9 +25,9 @@ WidgetUI.breakpoints = {
 WidgetUI.fonts = {
   sixth = { status = BOLD },
   quarter = { status = BOLD },
-  third = { status = BOLD },
-  half = { hero = BOLD, detail = SMLSIZE },
-  full = { hero = MIDSIZE, detail = SMLSIZE },
+  third = { status = BOLD, cheatsheet = SMLSIZE },
+  half = { hero = BOLD, detail = SMLSIZE, cheatsheet = SMLSIZE },
+  full = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = SMLSIZE },
 }
 
 -- ============================================================================
@@ -186,9 +186,10 @@ function WidgetUI.buildThird(w, h, opa)
       },
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.third.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -244,9 +245,10 @@ function WidgetUI.buildHalf(w, h, opa)
       },
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.half.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -285,9 +287,10 @@ function WidgetUI.buildFull(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.full.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)

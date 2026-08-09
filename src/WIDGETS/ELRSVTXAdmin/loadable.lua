@@ -854,7 +854,7 @@ function VTXDisplay.mainColor()
   return COLOR_THEME_PRIMARY1
 end
 
-function VTXDisplay.build6posLabels()
+function VTXDisplay.build6posLabels(font)
   if not Protocol.hasModule() then
     return {}
   end
@@ -866,7 +866,7 @@ function VTXDisplay.build6posLabels()
     local idx = i
     labels[#labels + 1] = {
       type = lvgl.LABEL,
-      font = SMLSIZE,
+      font = font or SMLSIZE,
       color = function()
         return (Presets.lastPos == idx) and COLOR_THEME_PRIMARY1 or COLOR_THEME_DISABLED
       end,
@@ -883,11 +883,8 @@ function VTXDisplay.build6posLabels()
   return labels
 end
 
-function VTXDisplay.buildCheatsheet()
-  local labels = VTXDisplay.build6posLabels()
-  if #labels == 0 then
-    return nil
-  end
+--- Wrap 6POS labels in a row box. Shared by the one-row and two-row cheatsheets.
+local function cheatsheetRow(labels)
   return {
     type = lvgl.BOX,
     flexFlow = lvgl.FLOW_ROW,
@@ -897,6 +894,31 @@ function VTXDisplay.buildCheatsheet()
     visible = Protocol.hasModule,
     children = labels,
   }
+end
+
+--- Single row of all six presets, for tiers with only one line to spare.
+function VTXDisplay.buildCheatsheet(font)
+  local labels = VTXDisplay.build6posLabels(font)
+  if #labels == 0 then
+    return nil
+  end
+  return cheatsheetRow(labels)
+end
+
+--- Two rows, 1-3 over 4-6. Fits narrow zones and reads larger where height allows.
+function VTXDisplay.buildCheatsheetRows(font)
+  local labels = VTXDisplay.build6posLabels(font)
+  if #labels == 0 then
+    return nil, nil
+  end
+  local row1, row2 = {}, {}
+  for i = 1, 3 do
+    row1[#row1 + 1] = labels[i]
+  end
+  for i = 4, 6 do
+    row2[#row2 + 1] = labels[i]
+  end
+  return cheatsheetRow(row1), cheatsheetRow(row2)
 end
 
 -- ============================================================================

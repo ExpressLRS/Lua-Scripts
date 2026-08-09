@@ -26,9 +26,9 @@ WidgetUI.breakpoints = {
 WidgetUI.fonts = {
   sixth = { status = BOLD },
   quarter = { status = BOLD },
-  third = { status = BOLD },
-  half = { hero = MIDSIZE, detail = SMLSIZE },
-  full = { hero = MIDSIZE, detail = SMLSIZE },
+  third = { status = BOLD, cheatsheet = STDSIZE },
+  half = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
+  full = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
 }
 
 -- ============================================================================
@@ -54,38 +54,6 @@ local function detailLong()
   end
   local pit = VTX.state.pitmode and "  Pit" or ""
   return table.concat({ VTXDisplay.powerLong(), pit })
-end
-
---- Build two narrow cheatsheet rows (3 labels each), or nil pair.
-local function buildCheatsheetNarrow()
-  local labels = VTXDisplay.build6posLabels()
-  if #labels == 0 then
-    return nil, nil
-  end
-  local row1, row2 = {}, {}
-  for i = 1, 3 do
-    row1[#row1 + 1] = labels[i]
-  end
-  for i = 4, 6 do
-    row2[#row2 + 1] = labels[i]
-  end
-  return {
-    type = lvgl.BOX,
-    align = LEFT,
-    flexFlow = lvgl.FLOW_ROW,
-    flexPad = lvgl.PAD_TINY,
-    borderPad = 0,
-    visible = Protocol.hasModule,
-    children = row1,
-  }, {
-    type = lvgl.BOX,
-    align = LEFT,
-    flexFlow = lvgl.FLOW_ROW,
-    flexPad = lvgl.PAD_TINY,
-    borderPad = 0,
-    visible = Protocol.hasModule,
-    children = row2,
-  }
 end
 
 -- ============================================================================
@@ -187,10 +155,10 @@ function WidgetUI.buildQuarter(w, h, opa)
     },
   }
   if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
+    local cs1, cs2 = VTXDisplay.buildCheatsheetRows()
+    if cs1 then
+      rows[#rows + 1] = cs1
+      rows[#rows + 1] = cs2
     end
   else
     local cs = VTXDisplay.buildCheatsheet()
@@ -252,17 +220,10 @@ function WidgetUI.buildThird(w, h, opa)
     },
   }
   -- Cheatsheet rows
-  if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
-    end
-  else
-    local cs = VTXDisplay.buildCheatsheet()
-    if cs then
-      rows[#rows + 1] = cs
-    end
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.third.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -301,17 +262,10 @@ function WidgetUI.buildHalf(w, h, opa)
       text = detailLong,
     },
   }
-  if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
-    end
-  else
-    local cs = VTXDisplay.buildCheatsheet()
-    if cs then
-      rows[#rows + 1] = cs
-    end
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.half.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -350,17 +304,10 @@ function WidgetUI.buildFull(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
-    end
-  else
-    local cs = VTXDisplay.buildCheatsheet()
-    if cs then
-      rows[#rows + 1] = cs
-    end
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.full.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
