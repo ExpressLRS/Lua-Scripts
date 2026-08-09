@@ -37,7 +37,7 @@ WidgetUI.fonts = {
 
 --- Shorter detail line for narrow portrait screen.
 local function detailLine()
-  if not VTX.isTuned() then
+  if not VTX.hasPower() then
     return ""
   end
   local pit = VTX.state.pitmode and " Pit" or ""
@@ -46,10 +46,10 @@ end
 
 --- Shorter long-form detail line for narrow portrait screen.
 local function detailLong()
-  if Protocol.isActive() and VTX.state.band == 0 then
+  if VTX.isDisabled() then
     return "VTX Disabled"
   end
-  if not VTX.isTuned() then
+  if not VTX.hasPower() then
     return ""
   end
   local pit = VTX.state.pitmode and "  Pit" or ""

@@ -104,6 +104,18 @@ function VTX.isTuned()
   return Protocol.isActive() and VTX.state.band > 0
 end
 
+--- True when the module is up but the VTX band is set to Off.
+function VTX.isDisabled()
+  return Protocol.isActive() and VTX.state.band == 0
+end
+
+--- True when a power level is set. ExpressLRS omits power and pit mode from the VTX Admin
+--- folder name when power is "-", and hides the Pitmode field entirely, so neither value is
+--- meaningful until a power level is chosen.
+function VTX.hasPower()
+  return VTX.isTuned() and VTX.state.power > 0
+end
+
 --- Sync desired values with current state (e.g. on discovery or entering full-screen).
 function VTX.syncDesiredFromState()
   local s = VTX.state
@@ -771,23 +783,24 @@ function VTXDisplay.statusText()
 end
 
 function VTXDisplay.powerShort()
-  if not VTX.isTuned() then
+  if not VTX.hasPower() then
     return ""
   end
-  return VTX.state.power > 0 and table.concat({ "P", VTX.state.power }) or "P-"
+  return table.concat({ "P", VTX.state.power })
 end
 
 function VTXDisplay.powerLong()
-  if not VTX.isTuned() then
+  if not VTX.hasPower() then
     return ""
   end
-  return VTX.state.power > 0 and table.concat({ "Power ", VTX.state.power }) or "Power -"
+  return table.concat({ "Power ", VTX.state.power })
 end
 
+--- Pit mode state. "" when no power is set: ExpressLRS cannot send pit mode without it.
 --- A switch binding names the switch rather than asserting a position the folder name
 --- does not carry.
 function VTXDisplay.pitText()
-  if not VTX.isTuned() then
+  if not VTX.hasPower() then
     return ""
   end
   if VTX.state.pitmode then
@@ -801,39 +814,34 @@ end
 
 --- As pitText, but reports a disabled VTX instead of falling silent.
 function VTXDisplay.pitTextLong()
-  if Protocol.isActive() and VTX.state.band == 0 then
+  if VTX.isDisabled() then
     return "VTX Disabled"
   end
   return VTXDisplay.pitText()
 end
 
---- Terse flag for narrow tiers.
+--- Terse flag for narrow tiers. Only a confirmed pit mode is worth the width.
 function VTXDisplay.pitShort()
-  if not VTX.isTuned() then
-    return ""
-  end
   return VTX.state.pitmode and "Pit" or ""
 end
 
+--- Red only when pit mode is confirmed on. An aux binding is not an assertion.
 function VTXDisplay.pitColor()
-  if not VTX.isTuned() then
-    return COLOR_THEME_SECONDARY1
-  end
   return VTX.state.pitmode and RED or COLOR_THEME_SECONDARY1
 end
 
 function VTXDisplay.detailLine()
-  if not VTX.isTuned() then
+  if not VTX.hasPower() then
     return ""
   end
   return table.concat({ VTXDisplay.powerShort(), " ", VTXDisplay.pitText() })
 end
 
 function VTXDisplay.detailLong()
-  if Protocol.isActive() and VTX.state.band == 0 then
+  if VTX.isDisabled() then
     return "VTX Disabled"
   end
-  if not VTX.isTuned() then
+  if not VTX.hasPower() then
     return ""
   end
   return table.concat({ VTXDisplay.powerLong(), "  ", VTXDisplay.pitText() })
@@ -936,12 +944,13 @@ local WidgetUI = loadScript(uiPath)({
 -- Portrait screens get a narrower label column to leave more room for controls.
 local LABEL_PCT = (LCD_W < LCD_H) and 42 or 50
 
-local function createRow(container, label, hint)
+local function createRow(container, label, hint, visibleFn)
   local row = container:rectangle({
     w = lvgl.PERCENT_SIZE + 100,
     thickness = 0,
     flexFlow = lvgl.FLOW_ROW,
     flexPad = 0,
+    visible = visibleFn,
   })
 
   local labelChildren = {
@@ -997,8 +1006,8 @@ local function createNumberRow(container, label, min, max, getFn, setFn, editedF
   })
 end
 
-local function createToggleRow(container, label, getFn, setFn)
-  local ctrl = createRow(container, label)
+local function createToggleRow(container, label, getFn, setFn, visibleFn)
+  local ctrl = createRow(container, label, nil, visibleFn)
   ctrl:toggle({
     get = getFn,
     set = setFn,
@@ -1126,11 +1135,14 @@ local function buildFullScreen()
     return v == 0 and "-" or tostring(v)
   end)
 
+  -- Pit mode rides on the power byte, so ExpressLRS hides it while power is "-".
   createToggleRow(fields, "Pit Mode", function()
     return d.pitmode
   end, function(v)
     d.pitmode = v
     Protocol.writeConfig()
+  end, function()
+    return d.power > 0
   end)
 
   local sendWrapper = fields:box({
