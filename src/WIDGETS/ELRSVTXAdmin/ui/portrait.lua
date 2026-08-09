@@ -31,35 +31,29 @@ WidgetUI.fonts = {
   full = { hero = MIDSIZE, detail = SMLSIZE },
 }
 
-local function pitModeColor()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return COLOR_THEME_SECONDARY1
-  end
-  return VTX.state.pitmode and RED or COLOR_THEME_SECONDARY1
-end
-
-local function pitModeText()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return ""
-  end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
-end
-
 -- ============================================================================
 -- Minimized display helpers (portrait-specific overrides)
 -- ============================================================================
 
 --- Shorter detail line for narrow portrait screen.
 local function detailLine()
-  if not Protocol.isActive() then
+  if not VTX.isTuned() then
     return ""
   end
-  if VTX.state.band == 0 then
-    return ""
-  end
-  local pwr = VTX.state.power > 0 and table.concat({ "P", VTX.state.power }) or "P-"
   local pit = VTX.state.pitmode and " Pit" or ""
-  return table.concat({ pwr, pit })
+  return table.concat({ VTXDisplay.powerShort(), pit })
+end
+
+--- Shorter long-form detail line for narrow portrait screen.
+local function detailLong()
+  if Protocol.isActive() and VTX.state.band == 0 then
+    return "VTX Disabled"
+  end
+  if not VTX.isTuned() then
+    return ""
+  end
+  local pit = VTX.state.pitmode and "  Pit" or ""
+  return table.concat({ VTXDisplay.powerLong(), pit })
 end
 
 --- Build two narrow cheatsheet rows (3 labels each), or nil pair.
@@ -75,16 +69,13 @@ local function buildCheatsheetNarrow()
   for i = 4, 6 do
     row2[#row2 + 1] = labels[i]
   end
-  local hasModule = function()
-    return Protocol.state ~= Protocol.STATE_NO_MODULE
-  end
   return {
     type = lvgl.BOX,
     align = LEFT,
     flexFlow = lvgl.FLOW_ROW,
     flexPad = lvgl.PAD_TINY,
     borderPad = 0,
-    visible = hasModule,
+    visible = Protocol.hasModule,
     children = row1,
   }, {
     type = lvgl.BOX,
@@ -92,7 +83,7 @@ local function buildCheatsheetNarrow()
     flexFlow = lvgl.FLOW_ROW,
     flexPad = lvgl.PAD_TINY,
     borderPad = 0,
-    visible = hasModule,
+    visible = Protocol.hasModule,
     children = row2,
   }
 end
@@ -190,8 +181,8 @@ function WidgetUI.buildQuarter(w, h, opa)
           type = lvgl.LABEL,
           align = LEFT,
           font = SMLSIZE,
-          color = pitModeColor,
-          text = pitModeText,
+          color = VTXDisplay.pitColor,
+          text = VTXDisplay.pitText,
         },
       },
     },
@@ -308,17 +299,7 @@ function WidgetUI.buildHalf(w, h, opa)
       align = LEFT,
       font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
-      text = function()
-        if not Protocol.isActive() then
-          return ""
-        end
-        if VTX.state.band == 0 then
-          return "VTX Disabled"
-        end
-        local pwr = VTX.state.power > 0 and table.concat({ "Power ", VTX.state.power }) or "Power -"
-        local pit = VTX.state.pitmode and "  Pit" or ""
-        return table.concat({ pwr, pit })
-      end,
+      text = detailLong,
     },
   }
   if w < 200 then

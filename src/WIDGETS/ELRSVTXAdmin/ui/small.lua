@@ -30,30 +30,6 @@ WidgetUI.fonts = {
   full = { hero = MIDSIZE, detail = SMLSIZE },
 }
 
-local function pitModeColor()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return COLOR_THEME_SECONDARY1
-  end
-  return VTX.state.pitmode and RED or COLOR_THEME_SECONDARY1
-end
-
-local function pitModeText()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return ""
-  end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
-end
-
-local function pitModeTextLong()
-  if not Protocol.isActive() then
-    return ""
-  end
-  if VTX.state.band == 0 then
-    return "VTX Disabled"
-  end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
-end
-
 -- ============================================================================
 -- Minimized layout builders (by widget height tier)
 -- ============================================================================
@@ -95,8 +71,8 @@ function WidgetUI.buildSixth(w, h, opa)
       type = lvgl.LABEL,
       align = LEFT,
       font = SMLSIZE,
-      color = pitModeColor,
-      text = pitModeText,
+      color = VTXDisplay.pitColor,
+      text = VTXDisplay.pitText,
     },
   }
   local labels = VTXDisplay.build6posLabels()
@@ -150,12 +126,7 @@ function WidgetUI.buildQuarter(w, h, opa)
           align = LEFT,
           font = SMLSIZE,
           color = RED,
-          text = function()
-            if not Protocol.isActive() or VTX.state.band == 0 then
-              return ""
-            end
-            return VTX.state.pitmode and "Pit" or ""
-          end,
+          text = VTXDisplay.pitShort,
         },
       },
     },
@@ -211,8 +182,8 @@ function WidgetUI.buildThird(w, h, opa)
         type = lvgl.LABEL,
         align = LEFT,
         font = SMLSIZE,
-        color = pitModeColor,
-        text = pitModeText,
+        color = VTXDisplay.pitColor,
+        text = VTXDisplay.pitText,
       },
     },
   }
@@ -268,8 +239,8 @@ function WidgetUI.buildHalf(w, h, opa)
           type = lvgl.LABEL,
           align = LEFT,
           font = SMLSIZE,
-          color = pitModeColor,
-          text = pitModeTextLong,
+          color = VTXDisplay.pitColor,
+          text = VTXDisplay.pitTextLong,
         },
       },
     },

@@ -84,6 +84,11 @@ function VTX.parseFolderName(name)
   return true
 end
 
+--- True when the VTX is tuned to a band.
+function VTX.isTuned()
+  return Protocol.isActive() and VTX.state.band > 0
+end
+
 --- Sync desired values with current state (e.g. on discovery or entering full-screen).
 function VTX.syncDesiredFromState()
   local s = VTX.state
@@ -140,6 +145,13 @@ end
 
 function Protocol.isActive()
   return Protocol.state == Protocol.STATE_READY or Protocol.state == Protocol.STATE_SENDING
+end
+
+--- True when a CRSF module answered discovery. Weaker than isActive(): the 6POS preset
+--- cheatsheet is local radio state read from presets.txt, not VTX telemetry, so it is worth
+--- showing before discovery finishes.
+function Protocol.hasModule()
+  return Protocol.state ~= Protocol.STATE_NO_MODULE
 end
 
 -- Response timeout for PARAMETER_READ: 0.5s for local TX module.
@@ -713,17 +725,17 @@ local VTXDisplay = {}
 
 --- True when VTX is tuned to a band (band+channel should be shown in fixed column).
 function VTXDisplay.showChannel()
-  return Protocol.isActive() and VTX.state.band > 0
+  return VTX.isTuned()
 end
 
 --- True when a status message should be shown (loading, error, VTX off).
 function VTXDisplay.showStatus()
-  return not Protocol.isActive() or VTX.state.band == 0
+  return not VTX.isTuned()
 end
 
 --- Band + channel string (e.g. "F6", "R4") when VTX is tuned, "" otherwise.
 function VTXDisplay.bandChannel()
-  if not Protocol.isActive() or VTX.state.band == 0 then
+  if not VTX.isTuned() then
     return ""
   end
   return table.concat({ VTX.state.bandLetter, VTX.state.channel })
@@ -731,7 +743,7 @@ end
 
 --- Short status message for non-VTX states, "" when VTX is tuned.
 function VTXDisplay.statusText()
-  if Protocol.state == Protocol.STATE_NO_MODULE then
+  if not Protocol.hasModule() then
     return "No module"
   end
   if not Protocol.isActive() then
@@ -743,35 +755,65 @@ function VTXDisplay.statusText()
   return ""
 end
 
-function VTXDisplay.detailLine()
-  if not Protocol.isActive() then
-    return ""
-  end
-  if VTX.state.band == 0 then
-    return ""
-  end
-  local pwr = VTX.state.power > 0 and table.concat({ "P", VTX.state.power }) or "P-"
-  local pit = VTX.state.pitmode and " Pit Mode On" or " Pit Mode Off"
-  return table.concat({ pwr, pit })
-end
-
 function VTXDisplay.powerShort()
-  if not Protocol.isActive() or VTX.state.band == 0 then
+  if not VTX.isTuned() then
     return ""
   end
   return VTX.state.power > 0 and table.concat({ "P", VTX.state.power }) or "P-"
 end
 
-function VTXDisplay.detailLong()
-  if not Protocol.isActive() then
+function VTXDisplay.powerLong()
+  if not VTX.isTuned() then
     return ""
   end
-  if VTX.state.band == 0 then
+  return VTX.state.power > 0 and table.concat({ "Power ", VTX.state.power }) or "Power -"
+end
+
+function VTXDisplay.pitText()
+  if not VTX.isTuned() then
+    return ""
+  end
+  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
+end
+
+--- As pitText, but reports a disabled VTX instead of falling silent.
+function VTXDisplay.pitTextLong()
+  if Protocol.isActive() and VTX.state.band == 0 then
     return "VTX Disabled"
   end
-  local pwr = VTX.state.power > 0 and table.concat({ "Power ", VTX.state.power }) or "Power -"
-  local pit = VTX.state.pitmode and "  Pit Mode On" or "  Pit Mode Off"
-  return table.concat({ pwr, pit })
+  return VTXDisplay.pitText()
+end
+
+--- Terse flag for narrow tiers.
+function VTXDisplay.pitShort()
+  if not VTX.isTuned() then
+    return ""
+  end
+  return VTX.state.pitmode and "Pit" or ""
+end
+
+function VTXDisplay.pitColor()
+  if not VTX.isTuned() then
+    return COLOR_THEME_SECONDARY1
+  end
+  return VTX.state.pitmode and RED or COLOR_THEME_SECONDARY1
+end
+
+function VTXDisplay.detailLine()
+  if not VTX.isTuned() then
+    return ""
+  end
+  return table.concat({ VTXDisplay.powerShort(), " ", VTXDisplay.pitText() })
+end
+
+function VTXDisplay.detailLong()
+  if Protocol.isActive() and VTX.state.band == 0 then
+    return "VTX Disabled"
+  end
+  if not VTX.isTuned() then
+    return ""
+  end
+  return table.concat({ VTXDisplay.powerLong(), "  ", VTXDisplay.pitText() })
 end
 
 function VTXDisplay.mainColor()
@@ -782,7 +824,7 @@ function VTXDisplay.mainColor()
 end
 
 function VTXDisplay.build6posLabels()
-  if Protocol.state == Protocol.STATE_NO_MODULE then
+  if not Protocol.hasModule() then
     return {}
   end
   if not Presets.enabled then
@@ -821,9 +863,7 @@ function VTXDisplay.buildCheatsheet()
     borderPad = 0,
     flexPad = lvgl.PAD_TINY,
     align = LEFT,
-    visible = function()
-      return Protocol.state ~= Protocol.STATE_NO_MODULE
-    end,
+    visible = Protocol.hasModule,
     children = labels,
   }
 end
@@ -1007,7 +1047,7 @@ local function buildFullScreen()
   })
 
   -- No module — show checklist instead of controls (matches expresslrs.lua NoModuleDialog)
-  if Protocol.state == Protocol.STATE_NO_MODULE then
+  if not Protocol.hasModule() then
     pg:rectangle({
       w = lvgl.PERCENT_SIZE + 100,
       thickness = 0,
