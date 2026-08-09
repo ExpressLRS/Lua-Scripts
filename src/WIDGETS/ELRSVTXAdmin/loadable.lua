@@ -200,11 +200,6 @@ function Protocol.sendParameterWrite(fieldId, value)
   )
 end
 
---- Request ELRS_STATUS (connection state) by writing field 0.
-function Protocol.sendStatusPoll()
-  Protocol.sendParameterWrite(0, 0)
-end
-
 -- ============================================================================
 -- Protocol: Response handler (registered on singleton dispatcher)
 -- ============================================================================
@@ -315,7 +310,6 @@ function Protocol.tick()
     if now - Protocol.lastFolderPoll >= Protocol.FOLDER_POLL_INTERVAL then
       Protocol.lastFolderPoll = now
       Protocol.sendParameterRead(VTX.ids.folder)
-      Protocol.sendStatusPoll()
     end
   elseif st == Protocol.STATE_SENDING then
     if Protocol.writeIdx <= #Protocol.writeQueue then
