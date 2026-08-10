@@ -41,7 +41,7 @@ local config = {
 }
 
 -- ============================================================================
--- CRSF Protocol Constants (local copies, independent of Protocol.CRSF)
+-- CRSF Protocol Constants (local copies, independent of the shared library)
 -- ============================================================================
 
 local CRSF = {

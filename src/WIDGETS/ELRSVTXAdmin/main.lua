@@ -4,7 +4,7 @@
 -- (full-screen) via the CRSF config protocol to the ELRS TX module.     --
 --                                                                       --
 -- Uses the loadable.lua pattern to minimize memory when not in use.     --
--- Requires /SCRIPTS/ELRSLib on the SD card for shared CRSF protocol.    --
+-- Requires /SCRIPTS/ELRS on the SD card for shared CRSF protocol.       --
 ---------------------------------------------------------------------------
 
 local name = "ELRSVTXAdmin"

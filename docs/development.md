@@ -37,9 +37,15 @@ Run `make help` to list all targets. The Makefile groups them into three categor
 | `main.lua` | Entry point and run-loop orchestrator |
 | `protocol.lua` | CRSF frame parsing, device discovery, parameter read/write |
 | `navigation.lua` | Folder and device navigation stack |
-| `shim.lua` | Polyfills for BW radios missing standard Lua functions |
 | `ui/lvgl.lua` | Color LCD interface (LVGL dialogs, command pages, warnings) |
 | `ui/lcd.lua` | BW LCD interface (text cursor, popups) |
+
+The tool builds on the shared `SCRIPTS/ELRS/` library, which the widgets use too:
+
+| Module | Purpose |
+|--------|---------|
+| `SCRIPTS/ELRS/crsf.lua` | CRSF constants, telemetry transport (`pop`/`push`), module detection, handler registry |
+| `SCRIPTS/ELRS/shim.lua` | Polyfills for BW radios missing standard Lua functions |
 
 ## CRSF Simulator
 
@@ -51,7 +57,7 @@ The simulator provides a packet-level mock of `crossfireTelemetryPop` and `cross
 
 ### How it works
 
-When the tool detects it is running in the EdgeTX simulator (version string ends with `-simu`), `main.lua` automatically loads the simulator module from `/SCRIPTS/CRSFSimulator/csrfsimulator.lua` and patches the protocol's `pop`, `push`, and `hasCrsfModule` functions with the mock implementations.
+When running in the EdgeTX simulator (version string ends with `-simu`), `SCRIPTS/ELRS/crsf.lua` automatically loads the simulator module from `/SCRIPTS/CRSFSimulator/csrfsimulator.lua` at load time and patches its `pop`, `push`, `hasCrsfModule`, and `getSensorValue` functions with the mock implementations. The tool and the widgets both talk to CRSF through that library, so the mock covers all of them.
 
 Run `make sync` (which runs `edgetx-cli dev sync`) to copy the sources -- including the dev-only `CRSFSimulator` library -- onto the simulator SD card. `edgetx-cli pkg install` omits the library automatically, so the simulator is never shipped to real hardware.
 

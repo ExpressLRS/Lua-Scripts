@@ -15,8 +15,9 @@ local useLvgl = (lvgl ~= nil)
 -- Load shared modules
 -- ============================================================================
 
-local shim = loadScript("/SCRIPTS/TOOLS/ExpressLRS/shim.lua")()
-local Protocol = loadScript("/SCRIPTS/TOOLS/ExpressLRS/protocol.lua")(shim)
+local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
+local crsf = loadScript("/SCRIPTS/ELRS/crsf.lua")()
+local Protocol = loadScript("/SCRIPTS/TOOLS/ExpressLRS/protocol.lua")(crsf, shim)
 local Navigation = loadScript("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")()
 
 -- ============================================================================
@@ -41,7 +42,7 @@ function App.checkCrsfModule()
     return App.crsfModuleFound
   end
   App.crsfModuleChecked = true
-  App.crsfModuleFound = Protocol.hasCrsfModule()
+  App.crsfModuleFound = crsf.hasCrsfModule()
   return App.crsfModuleFound
 end
 
@@ -81,8 +82,8 @@ end
 
 -- Reload at root: switch back to TX device or reload fields + ping.
 function App.reloadAtRoot()
-  if Protocol.deviceId ~= Protocol.CRSF.ADDRESS_TX then
-    local txDevice = Protocol.getDevice(Protocol.CRSF.ADDRESS_TX)
+  if Protocol.deviceId ~= crsf.CONST.ADDRESS_TX then
+    local txDevice = Protocol.getDevice(crsf.CONST.ADDRESS_TX)
     if txDevice then
       App.loadDevice(txDevice)
     end
@@ -91,27 +92,6 @@ function App.reloadAtRoot()
     Protocol.reloadAllFields()
   end
   Protocol.pingDevices()
-end
-
--- ============================================================================
--- Mock data for simulator
--- ============================================================================
-
-local function setMock()
-  local _, rv = getVersion()
-  if string.sub(rv, -5) ~= "-simu" then
-    return
-  end
-  local mockModule = loadScript("/SCRIPTS/CRSFSimulator/csrfsimulator.lua")
-  if mockModule == nil then
-    return
-  end
-  local mock = mockModule()
-  Protocol.pop = mock.pop
-  Protocol.push = mock.push
-  Protocol.hasCrsfModule = function()
-    return mock.moduleFound
-  end
 end
 
 -- ============================================================================
@@ -128,6 +108,7 @@ local function init()
     App = App,
     Navigation = Navigation,
     Protocol = Protocol,
+    crsf = crsf,
     VERSION = VERSION,
   }
   if useLvgl then
@@ -136,11 +117,8 @@ local function init()
     UI = loadScript("/SCRIPTS/TOOLS/ExpressLRS/ui/lcd.lua")(deps)
   end
   UI.init()
-  setMock()
-  -- The returned table stays on the standalone Lua stack and pins init(), which holds
-  -- setMock as an upvalue. Drop both.
-  ---@diagnostic disable-next-line: cast-local-type
-  setMock = nil
+  -- The returned table stays on the standalone Lua stack and pins init(),
+  -- which holds VERSION and useLvgl as upvalues. Drop it.
   M.init = nil
 end
 

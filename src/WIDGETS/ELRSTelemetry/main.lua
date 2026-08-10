@@ -4,7 +4,7 @@
 -- Battery, Current, GPS, and Flight Mode.                              --
 --                                                                      --
 -- Uses the loadable.lua pattern to minimize memory when not in use.    --
--- Requires /SCRIPTS/ELRSLib on the SD card for shared CRSF protocol.   --
+-- Requires /SCRIPTS/ELRS on the SD card for shared CRSF protocol.      --
 ---------------------------------------------------------------------------
 
 local name = "ELRSTelemetry"

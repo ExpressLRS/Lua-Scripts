@@ -9,10 +9,12 @@
 -- crossfireTelemetryPop() directly; they register callbacks via         --
 -- registerHandler() and push outgoing frames through CRSF.push().       --
 --                                                                       --
--- Loaded once via loadScript() from /SCRIPTS/ELRSLib/crsf.lua.          --
+-- Loaded once via loadScript() from /SCRIPTS/ELRS/crsf.lua.             --
 -- Returns a table with protocol constants, handler registry,            --
 -- pop queue dispatcher, and device info cache.                          --
 ---------------------------------------------------------------------------
+
+local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
 
 local CRSF = {}
 
@@ -41,18 +43,35 @@ CRSF.CONST = {
   FIELD_INT8 = 1,
   FIELD_UINT16 = 2,
   FIELD_INT16 = 3,
+  FIELD_UINT32 = 4,
+  FIELD_INT32 = 5,
+  FIELD_UINT64 = 6,
+  FIELD_INT64 = 7,
   FIELD_FLOAT = 8,
   FIELD_TEXT_SELECTION = 9,
   FIELD_STRING = 10,
   FIELD_FOLDER = 11,
   FIELD_INFO = 12,
   FIELD_COMMAND = 13,
+  FIELD_VTX = 15,
 
-  -- Command states
+  -- Command steps (commandStep_e in ExpressLRS CRSFParameters.h)
   CMD_IDLE = 0,
-  CMD_CLICK = 1,
-  CMD_EXECUTING = 2,
-  CMD_CONFIRMED = 3,
+  CMD_CLICK = 1, -- user has clicked the command to execute
+  CMD_EXECUTING = 2, -- command is executing
+  CMD_ASKCONFIRM = 3, -- command pending user OK
+  CMD_CONFIRMED = 4, -- user has confirmed
+  CMD_CANCEL = 5, -- user has requested cancel
+  CMD_QUERY = 6, -- UI is requesting status update
+
+  -- ELRS identification (serial number field in DEVICE_INFO)
+  ELRS_SERIAL_ID = 0x454C5253,
+
+  -- ELRS flags: bits 0-1 are status (connected, status1),
+  -- bits 2-4 are warnings (model match, armed, warning1),
+  -- bits 5-7 are critical errors (error connected, error baudrate, critical2)
+  ELRS_FLAGS_STATUS_MASK = 0x03, -- bits 0-1: status flags only
+  ELRS_FLAGS_WARNING_THRESHOLD = 0x1F, -- bits 5+: critical error flags
 
   -- Folder child list terminator
   FIELD_LIST_END = 0xFF,
@@ -181,7 +200,7 @@ function CRSF:unregisterHandler(frameType, callback)
   end
   for i = #handlers, 1, -1 do
     if handlers[i] == callback then
-      table.remove(handlers, i)
+      shim.tableRemove(handlers, i)
       return
     end
   end
@@ -235,7 +254,7 @@ function CRSF:fieldGetString(data, off)
     off = off + 1
     b = data[off]
   end
-  return table.concat(data, nil, startOff, off - 1), off + 1
+  return shim.tableConcat(data, nil, startOff, off - 1), off + 1
 end
 
 --- Send a DEVICE_PING if device info is not yet available.

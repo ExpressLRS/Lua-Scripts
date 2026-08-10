@@ -8,6 +8,7 @@ local deps = ...
 local App = deps.App
 local Navigation = deps.Navigation
 local Protocol = deps.Protocol
+local crsf = deps.crsf
 local VERSION = deps.VERSION
 
 local VERSION_CHECK_ENABLED = true
@@ -169,14 +170,14 @@ function UI.render(event, _touchState)
   -- Warning flashing timer
   local time = getTime()
   if time > UI.titleShowWarnTimeout then
-    UI.titleShowWarn = (Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
+    UI.titleShowWarn = (Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
     UI.titleShowWarnTimeout = time + 100
     UI.forceRedraw = true
   end
 
   -- Warning dismissal cooldown (60s before re-showing)
   if UI.warningDismissedAt then
-    if Protocol.elrsFlags <= Protocol.CRSF.ELRS_FLAGS_STATUS_MASK then
+    if Protocol.elrsFlags <= crsf.CONST.ELRS_FLAGS_STATUS_MASK then
       if time - UI.warningDismissedAt > 6000 then
         UI.warningDismissed = false
         UI.warningDismissedAt = nil
@@ -294,7 +295,7 @@ function UI.buildVisibleFields()
   if currentFolder == Navigation.FOLDER_OTHER_DEVICES then
     for _, device in ipairs(Protocol.devices) do
       if device.id ~= Protocol.deviceId then
-        vf[#vf + 1] = { id = device.id, name = device.name, type = Protocol.CRSF.DEVICE }
+        vf[#vf + 1] = { id = device.id, name = device.name, type = Protocol.DEVICE }
       end
     end
   else
@@ -306,7 +307,7 @@ function UI.buildVisibleFields()
     end
 
     if currentFolder == nil and #Protocol.devices > 1 and not Navigation.hasDeviceEntry() then
-      vf[#vf + 1] = { name = "Other Devices", type = Protocol.CRSF.DEVICE_FOLDER }
+      vf[#vf + 1] = { name = "Other Devices", type = Protocol.DEVICE_FOLDER }
     end
   end
 
@@ -353,11 +354,11 @@ function UI.incrField(step)
     return
   end
   local min, max = 0, 0
-  if field.type <= Protocol.CRSF.FLOAT then
+  if field.type <= crsf.CONST.FIELD_FLOAT then
     min = field.min or 0
     max = field.max or 0
     step = (field.step or 1) * step
-  elseif field.type == Protocol.CRSF.TEXT_SELECTION then
+  elseif field.type == crsf.CONST.FIELD_TEXT_SELECTION then
     min = 0
     max = #field.values - 1
   end
@@ -442,18 +443,18 @@ local function fieldCommandDisplay(field, y, attr)
 end
 
 local displayHandlers = {}
-displayHandlers[Protocol.CRSF.UINT8] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.INT8] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.UINT16] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.INT16] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.FLOAT] = fieldFloatDisplay
-displayHandlers[Protocol.CRSF.TEXT_SELECTION] = fieldTextSelDisplay
-displayHandlers[Protocol.CRSF.STRING] = fieldStringDisplay
-displayHandlers[Protocol.CRSF.INFO] = fieldStringDisplay
-displayHandlers[Protocol.CRSF.FOLDER] = fieldFolderDisplay
-displayHandlers[Protocol.CRSF.COMMAND] = fieldCommandDisplay
-displayHandlers[Protocol.CRSF.DEVICE] = fieldCommandDisplay
-displayHandlers[Protocol.CRSF.DEVICE_FOLDER] = fieldFolderDisplay
+displayHandlers[crsf.CONST.FIELD_UINT8] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_INT8] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_UINT16] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_INT16] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_FLOAT] = fieldFloatDisplay
+displayHandlers[crsf.CONST.FIELD_TEXT_SELECTION] = fieldTextSelDisplay
+displayHandlers[crsf.CONST.FIELD_STRING] = fieldStringDisplay
+displayHandlers[crsf.CONST.FIELD_INFO] = fieldStringDisplay
+displayHandlers[crsf.CONST.FIELD_FOLDER] = fieldFolderDisplay
+displayHandlers[crsf.CONST.FIELD_COMMAND] = fieldCommandDisplay
+displayHandlers[Protocol.DEVICE] = fieldCommandDisplay
+displayHandlers[Protocol.DEVICE_FOLDER] = fieldFolderDisplay
 
 -- ============================================================================
 -- Title bar drawing
@@ -516,9 +517,9 @@ function UI.handleEvent(event)
       UI.handleBack()
     end
   elseif event == EVT_VIRTUAL_ENTER then
-    if Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_WARNING_THRESHOLD then
+    if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
       Protocol.elrsFlags = 0
-      Protocol.push(Protocol.CRSF.FRAMETYPE_PARAMETER_WRITE, { Protocol.deviceId, Protocol.handsetId, 0x2E, 0x00 })
+      crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { Protocol.deviceId, Protocol.handsetId, 0x2E, 0x00 })
     elseif UI.isOnBackExit() then
       if Navigation.isAtRoot() then
         App.shouldExit = true
@@ -530,15 +531,15 @@ function UI.handleEvent(event)
       if field and field.name then
         local ft = field.type
 
-        if ft == Protocol.CRSF.FOLDER then
+        if ft == crsf.CONST.FIELD_FOLDER then
           UI.openFolder(field.id, field.name)
-        elseif ft == Protocol.CRSF.DEVICE_FOLDER then
+        elseif ft == Protocol.DEVICE_FOLDER then
           UI.openFolder(Navigation.FOLDER_OTHER_DEVICES, "Other Devices")
-        elseif ft == Protocol.CRSF.DEVICE then
+        elseif ft == Protocol.DEVICE then
           UI.switchDevice(field.id)
-        elseif ft == Protocol.CRSF.COMMAND then
+        elseif ft == crsf.CONST.FIELD_COMMAND then
           Protocol.handleCommandSave(field)
-        elseif not field.disabled and ft <= Protocol.CRSF.TEXT_SELECTION then
+        elseif not field.disabled and ft <= crsf.CONST.FIELD_TEXT_SELECTION then
           UI.edit = not UI.edit
           if not UI.edit then
             Protocol.fieldIntSave(field)
@@ -572,7 +573,7 @@ function UI.drawPage(event)
   lcd.clear()
   UI.drawTitle()
 
-  if Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_WARNING_THRESHOLD then
+  if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
     UI.drawWarning()
   else
     local totalCount = UI.getSelectableCount()
@@ -591,7 +592,7 @@ function UI.drawPage(event)
         local field = UI.getField(idx)
         if field and field.name then
           local ft = field.type
-          if ft < Protocol.CRSF.FOLDER or ft == Protocol.CRSF.INFO then
+          if ft < crsf.CONST.FIELD_FOLDER or ft == crsf.CONST.FIELD_INFO then
             lcd.drawText(UI.COL1, yPos, field.name, 0)
           end
           local displayFn = displayHandlers[ft]
@@ -610,14 +611,14 @@ end
 
 function UI.drawPopup(event)
   if event == EVT_VIRTUAL_EXIT then
-    Protocol.push(
-      Protocol.CRSF.FRAMETYPE_PARAMETER_WRITE,
-      { Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, Protocol.CRSF.CMD_CANCEL }
+    crsf.push(
+      crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
+      { Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL }
     )
     Protocol.fieldTimeout = getTime() + 200
   end
 
-  if Protocol.fieldPopup.status == Protocol.CRSF.CMD_ASKCONFIRM then
+  if Protocol.fieldPopup.status == crsf.CONST.CMD_ASKCONFIRM then
     local result = popupConfirmation(Protocol.fieldPopup.info or "", "PRESS [OK] to confirm", event)
     Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
     if result == "OK" then
@@ -625,7 +626,7 @@ function UI.drawPopup(event)
     elseif result == "CANCEL" then
       Protocol.fieldPopup = nil
     end
-  elseif Protocol.fieldPopup.status == Protocol.CRSF.CMD_EXECUTING then
+  elseif Protocol.fieldPopup.status == crsf.CONST.CMD_EXECUTING then
     if Protocol.fieldChunk == 0 then
       UI.commandRunningIndicator = (UI.commandRunningIndicator % 4) + 1
     end

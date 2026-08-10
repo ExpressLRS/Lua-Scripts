@@ -19,12 +19,12 @@ When done, your SD card should contain:
 SCRIPTS/
   ELRS/
     crsf.lua                  -- shared CRSF protocol library
+    shim.lua                  -- BW compatibility shim
   TOOLS/
     ExpressLRS/
       main.lua                -- entry point
       protocol.lua            -- CRSF protocol handling
       navigation.lua          -- folder navigation
-      shim.lua                -- BW compatibility shim
       ui/
         lvgl.lua              -- color LCD UI (LVGL)
         lcd.lua               -- black & white LCD UI
@@ -42,7 +42,7 @@ WIDGETS/
       ...
 ```
 
-The shared library `SCRIPTS/ELRS/crsf.lua` is required by both widgets.
+The shared library `SCRIPTS/ELRS/` is required by the configuration tool and both widgets.
 
 ### Install with edgetx-cli
 

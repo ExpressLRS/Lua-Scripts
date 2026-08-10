@@ -2,8 +2,7 @@
 -- B&W Compatibility Layer                                               --
 --                                                                       --
 -- Polyfills for standard Lua library functions missing on B&W radios    --
--- (table.concat, table.remove) and shared helpers (byte-array decoding, --
--- sensor value cache).                                                  --
+-- (table.concat, table.remove) and shared helpers (byte-array decoding). --
 --                                                                       --
 -- Lives in /SCRIPTS/ELRS/ alongside crsf.lua so it is available to     --
 -- both color widgets and B&W telemetry scripts.                         --
@@ -76,25 +75,6 @@ function shim.charsToString(t, i, j)
     parts[#parts + 1] = string.char(t[k])
   end
   return shim.tableConcat(parts)
-end
-
--- ============================================================================
--- Cached sensor value reader
--- Wraps getFieldInfo() + getValue() with a string->ID cache so the name
--- lookup is only done once per sensor. Avoids repeated string searches in
--- the source table on every call.
--- ============================================================================
-
-local vCache = {}
-
-function shim.getSensorValue(name)
-  local cid = vCache[name]
-  if cid == nil then
-    local info = getFieldInfo(name)
-    cid = info and info.id or 0
-    vCache[name] = cid
-  end
-  return cid ~= 0 and getValue(cid) or nil
 end
 
 return shim

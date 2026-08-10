@@ -8,6 +8,7 @@ local deps = ...
 local App = deps.App
 local Navigation = deps.Navigation
 local Protocol = deps.Protocol
+local crsf = deps.crsf
 local VERSION = deps.VERSION
 
 local VERSION_CHECK_ENABLED = true
@@ -545,8 +546,8 @@ local function handleCommandPopup()
     return
   end
 
-  if Protocol.fieldPopup.status == Protocol.CRSF.CMD_ASKCONFIRM then
-    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= Protocol.CRSF.CMD_ASKCONFIRM then
+  if Protocol.fieldPopup.status == crsf.CONST.CMD_ASKCONFIRM then
+    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= crsf.CONST.CMD_ASKCONFIRM then
       local field = Protocol.fieldPopup
       UI.commandDialog = CommandPage.showConfirm(field.name, function()
         return field.info or ""
@@ -555,8 +556,8 @@ local function handleCommandPopup()
       end, onCommandCancel)
     end
     Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
-  elseif Protocol.fieldPopup.status == Protocol.CRSF.CMD_EXECUTING then
-    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= Protocol.CRSF.CMD_EXECUTING then
+  elseif Protocol.fieldPopup.status == crsf.CONST.CMD_EXECUTING then
+    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= crsf.CONST.CMD_EXECUTING then
       local field = Protocol.fieldPopup
       UI.commandDialog = CommandPage.showExecuting(field.name, function()
         return field.info or ""
@@ -574,7 +575,7 @@ local function handleWarning()
   if App.shouldExit then
     return
   end
-  if Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_STATUS_MASK then
+  if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK then
     if not UI.warningDialog and not UI.warningDismissed then
       if Protocol.isModelMismatch() then
         UI.warningDialog = ModelMismatchDialog.show(function()
@@ -664,7 +665,7 @@ function UI.getSubtitle()
   end
 
   if
-    Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_STATUS_MASK
+    Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK
     and Protocol.elrsFlagsInfo
     and Protocol.elrsFlagsInfo ~= ""
   then
@@ -810,7 +811,7 @@ function UI.createChoiceRow(pg, field)
 end
 
 function UI.createNumberRow(pg, field)
-  local isFloat = field.type == Protocol.CRSF.FLOAT
+  local isFloat = field.type == crsf.CONST.FIELD_FLOAT
   local numberEdit = {
     type = lvgl.NUMBER_EDIT,
     min = field.min or 0,
@@ -975,19 +976,19 @@ function UI.buildFieldWidget(pg, field, folderWidth)
 
   local fieldType = field.type
 
-  if fieldType == Protocol.CRSF.FOLDER then
+  if fieldType == crsf.CONST.FIELD_FOLDER then
     return UI.createFolderWidget(pg, field, folderWidth)
   end
 
-  if fieldType == Protocol.CRSF.COMMAND then
+  if fieldType == crsf.CONST.FIELD_COMMAND then
     return UI.createCommandWidget(pg, field)
   end
 
-  if fieldType <= Protocol.CRSF.INT16 or fieldType == Protocol.CRSF.FLOAT then
+  if fieldType <= crsf.CONST.FIELD_INT16 or fieldType == crsf.CONST.FIELD_FLOAT then
     return UI.createNumberRow(pg, field)
   end
 
-  if fieldType == Protocol.CRSF.TEXT_SELECTION then
+  if fieldType == crsf.CONST.FIELD_TEXT_SELECTION then
     if UI.isBooleanField(field) then
       return UI.createToggleRow(pg, field)
     else
@@ -995,11 +996,11 @@ function UI.buildFieldWidget(pg, field, folderWidth)
     end
   end
 
-  if fieldType == Protocol.CRSF.STRING then
+  if fieldType == crsf.CONST.FIELD_STRING then
     return UI.createStringRow(pg, field)
   end
 
-  if fieldType == Protocol.CRSF.INFO then
+  if fieldType == crsf.CONST.FIELD_INFO then
     return UI.createInfoRow(pg, field)
   end
 end
@@ -1071,9 +1072,9 @@ function UI.build()
     while i <= #fieldsInFolder do
       local field = fieldsInFolder[i]
 
-      if field.type == Protocol.CRSF.FOLDER then
+      if field.type == crsf.CONST.FIELD_FOLDER then
         local folderBatch = {}
-        while i <= #fieldsInFolder and fieldsInFolder[i].type == Protocol.CRSF.FOLDER do
+        while i <= #fieldsInFolder and fieldsInFolder[i].type == crsf.CONST.FIELD_FOLDER do
           folderBatch[#folderBatch + 1] = fieldsInFolder[i]
           i = i + 1
         end
