@@ -1047,8 +1047,8 @@ local function createNumberRow(container, label, min, max, getFn, setFn, editedF
   })
 end
 
-local function createToggleRow(container, label, getFn, setFn, visibleFn)
-  local ctrl = createRow(container, label, nil, visibleFn)
+local function createToggleRow(container, label, getFn, setFn, visibleFn, hint)
+  local ctrl = createRow(container, label, hint, visibleFn)
   ctrl:toggle({
     get = getFn,
     set = setFn,
@@ -1231,7 +1231,7 @@ local function buildFullScreen()
   end, function(v)
     Presets.autoPushVtx = (v == 1)
     Presets.save()
-  end)
+  end, nil, "Send to the VTX as soon as the 6POS position changes. When off, use the trigger below.")
 
   createSourceRow(
     fields,
