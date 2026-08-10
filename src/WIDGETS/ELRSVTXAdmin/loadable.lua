@@ -652,6 +652,10 @@ function Presets.process()
 
   local preset = Presets.items[pos]
   if preset and preset.band > 0 then
+    -- Re-base on the module's current state so a 6POS change only ever writes band and
+    -- channel. VTX.desired can hold stale power/pitmode: ExpressLRS omits both from the
+    -- folder name when power is "-", and nothing re-syncs after a send completes.
+    VTX.syncDesiredFromState()
     VTX.desired.band = preset.band
     VTX.desired.channel = preset.channel
     print(table.concat({ "VTXAdmin: 6POS pos=", pos, " -> band=", preset.band, " ch=", preset.channel }))
