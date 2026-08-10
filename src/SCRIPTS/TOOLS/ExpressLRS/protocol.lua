@@ -635,20 +635,25 @@ function Protocol.parseDeviceInfoMessage(data)
   return device, isNew
 end
 
+-- Handle a parameter settings entry (0x2B) frame. Field data can span several frames,
+-- so this reassembles the chunks before decoding one field.
 function Protocol.parseParameterInfoMessage(data)
   local fieldId = (Protocol.fieldPopup and Protocol.fieldPopup.id) or Protocol.loadQueue[#Protocol.loadQueue]
+  -- Another device answered, or this is not the field we are waiting for: drop any partial data
   if data[2] ~= Protocol.deviceId or data[3] ~= fieldId then
     Protocol.fieldData = nil
     Protocol.fieldChunk = 0
-    return false
+    return
   end
   local field = Protocol.fields[fieldId]
   local chunksRemain = data[4]
+  -- If no field or the chunksremain changed when we have data, don't continue
   if not field or (Protocol.fieldData and chunksRemain ~= Protocol.expectChunksRemain) then
-    return false
+    return
   end
 
   local offset
+  -- If data is chunked, copy it to persistent buffer
   if chunksRemain > 0 or Protocol.fieldChunk > 0 then
     Protocol.fieldData = Protocol.fieldData or {}
     for i = 5, #data do
@@ -657,6 +662,7 @@ function Protocol.parseParameterInfoMessage(data)
     end
     offset = 1
   else
+    -- All data arrived in one chunk, operate directly on data
     Protocol.fieldData = data
     offset = 5
   end
@@ -664,19 +670,23 @@ function Protocol.parseParameterInfoMessage(data)
   if chunksRemain > 0 then
     Protocol.fieldChunk = Protocol.fieldChunk + 1
     Protocol.expectChunksRemain = chunksRemain - 1
-    return false
   else
+    -- Field data stream is now complete, process into a field
     Protocol.loadQueue[#Protocol.loadQueue] = nil
 
+    -- Need at least parent + type + one name byte for the entry to be usable
     if #Protocol.fieldData > (offset + 2) then
       field.id = fieldId
       field.parent = (Protocol.fieldData[offset] ~= 0) and Protocol.fieldData[offset] or nil
       field.type = bit32.band(Protocol.fieldData[offset + 1], 0x7f)
+      -- Hidden bit flipped, so the UI's cached list of visible fields has to be rebuilt
       local wasHidden = field.hidden
       field.hidden = bit32.btest(Protocol.fieldData[offset + 1], 0x80) or nil
       if field.hidden ~= wasHidden then
         Protocol.fieldHiddenChanged = true
       end
+      -- Passing the old name makes fieldGetStrOrOpts skip the decode and reuse that string,
+      -- which is only safe while no reload has flagged the name as possibly changed
       local cachedName = (not field.nameStale and not field.reloading) and field.name or nil
       field.name, offset = Protocol.fieldGetStrOrOpts(Protocol.fieldData, offset + 2, cachedName)
       field.nameStale = nil
@@ -702,8 +712,6 @@ function Protocol.parseParameterInfoMessage(data)
 
     Protocol.fieldChunk = 0
     Protocol.fieldData = nil
-
-    return Protocol.deviceId ~= Protocol.CRSF.ADDRESS_TX or #Protocol.loadQueue == 0
   end
 end
 
