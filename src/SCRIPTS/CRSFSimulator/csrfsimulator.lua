@@ -1029,7 +1029,7 @@ local function getElrsFlags()
     return 0x05 -- connected + model mismatch
   elseif config.scenario == "armed" then
     return 0x09 -- connected + armed
-  elseif config.scenario == "normal" or config.scenario == "slow_loading" then
+  elseif config.scenario == "normal" or config.scenario == "slow_loading" or config.scenario == "single_antenna" then
     return 0x01 -- connected
   else
     return 0x00 -- no telemetry
@@ -1363,6 +1363,22 @@ local scenarioTelemetry = {
     GSpd = 25.3,
     Alt = 142,
   },
+  -- A receiver with one RF path: it never writes uplink_RSSI_2, so 2RSS arrives
+  -- as 0 dBm and the widget should report no diversity.
+  single_antenna = {
+    TPWR = 50,
+    RFMD = 7,
+    ["1RSS"] = -84,
+    ["2RSS"] = 0,
+    RQly = 97,
+    ANT = 0,
+    RxBt = 15.1,
+    Curr = 11.0,
+    FM = "ACRO",
+    Sats = 11,
+    GSpd = 22.4,
+    Alt = 120,
+  },
   armed = {
     TPWR = 250,
     RFMD = 7,
@@ -1430,14 +1446,16 @@ local sensorJitter = {
 -- Per-scenario sensors that step through a fixed sequence instead of jittering,
 -- so both branches of an enum sensor are reachable within one simulator run.
 -- Takes precedence over sensorJitter and over the scenario's base value; one
--- entry is consumed per cache refresh, i.e. one per second.
--- Only normal cycles ANT: armed keeps it pinned to 0 so the widget's
--- non-diversity "N/A" state stays reachable somewhere.
+-- entry is consumed per cache refresh, i.e. one per second. A single-entry
+-- sequence pins a value that would otherwise be jittered.
 local sensorToggle = {
   normal = {
-    -- Starts on antenna 2 so the widget's diversity latch fires immediately,
-    -- then falls back so the antenna 1 branch renders too.
+    -- Alternate antennas so both the "Ant 1" and "Ant 2" branches render.
     ANT = { 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 }, -- ~5 s per antenna
+  },
+  single_antenna = {
+    -- Must stay exactly 0: that is what marks the second RF path as absent.
+    ["2RSS"] = { 0 },
   },
 }
 local toggleStep = 0

@@ -30,9 +30,6 @@ Telemetry = {
   cellCntCnt = nil,
   cellLastV = nil,
 
-  -- Diversity detection
-  isDiversity = false,
-
   -- Connection state, used to detect the falling edge on disconnect
   wasConnected = false,
 
@@ -152,11 +149,14 @@ function Telemetry.updateGps()
   end
 end
 
---- Update diversity flag from ant value.
-function Telemetry.updateDiversity(ant)
-  if ant and ant ~= 0 then
-    Telemetry.isDiversity = true
-  end
+--- Whether the RX reports a second antenna.
+--- An RX only writes uplink_RSSI_2 when it has two RF paths — a dual-radio RX
+--- fills it every packet, a switched-antenna RX once it first selects antenna 2.
+--- A single-antenna RX never touches it, so it arrives as 0 dBm, impossible for
+--- a real signal. Same test ExpressLRS uses on the TX module's own screens.
+function Telemetry.hasDiversity()
+  local rssi2 = Telemetry.link.rssi2
+  return rssi2 ~= nil and rssi2 ~= 0
 end
 
 --- Pick the active antenna's RSSI value from a link snapshot.
@@ -177,7 +177,6 @@ function Telemetry.resetConnection()
   Telemetry.cellCnt = nil
   Telemetry.cellCntCnt = nil
   Telemetry.cellLastV = nil
-  Telemetry.isDiversity = false
 end
 
 --- Refill the shared link snapshot and recompute all derived state.
@@ -203,7 +202,6 @@ function Telemetry.update()
     return
   end
 
-  Telemetry.updateDiversity(link.ant)
   Telemetry.updateGps()
   Telemetry.rangePct = Telemetry.getRangePct(link)
   if link.vbat then
@@ -541,7 +539,7 @@ local function buildFullScreen()
     end
     return table.concat({ tostring(rssi2), " dBm" })
   end, function()
-    if not Telemetry.isDiversity then
+    if not Telemetry.hasDiversity() then
       return COLOR_THEME_DISABLED
     end
     return COLOR_THEME_SECONDARY1
@@ -551,7 +549,7 @@ local function buildFullScreen()
     if not crsf.hasTelemetry then
       return "--"
     end
-    if not Telemetry.isDiversity then
+    if not Telemetry.hasDiversity() then
       return "N/A"
     end
     -- EdgeTX's telemetry list prints the raw ANT enum (0/1) and so does the TX

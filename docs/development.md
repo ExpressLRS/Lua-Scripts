@@ -65,6 +65,7 @@ The simulator supports multiple test scenarios, configurable via the `config.sce
 | `no_telemetry` | TX present but no RX telemetry. Shows "No telemetry" state. |
 | `reconnect` | Starts disconnected, transitions to connected after ~5 seconds. |
 | `model_mismatch` | TX + RX connected with Model ID mismatch flag. Triggers warning dialog. |
-| `armed` | TX + RX connected with "is Armed" warning flag. `ANT` is pinned to 0, which keeps the telemetry widget's non-diversity "N/A" state reachable. |
+| `armed` | TX + RX connected with "is Armed" warning flag. `ANT` is pinned to 0. |
+| `single_antenna` | TX + RX connected on a receiver with one RF path. `2RSS` is pinned to 0, so the telemetry widget reports no diversity. |
 | `slow_loading` | Parameter reads delayed by ~2 seconds each. Tests loading UI states. |
 | `no_module` | No CRSF module found. Triggers "No Module Found" error dialog. |
