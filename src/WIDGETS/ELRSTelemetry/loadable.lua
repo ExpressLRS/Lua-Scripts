@@ -219,6 +219,22 @@ function Telemetry.heroColor()
   return COLOR_THEME_PRIMARY1
 end
 
+--- Hero label font for one tier of a screen's WidgetUI.fonts table.
+--- Status text ("No CRSF module") is far longer than "LQ 100%", so tiers that would
+--- overflow declare a smaller heroStatus and drop to it while a status shows.
+--- Tiers without one get the constant back, so no callback runs per frame.
+function Telemetry.heroFont(tier)
+  if not tier.heroStatus then
+    return tier.hero
+  end
+  return function()
+    if Telemetry.statusText() then
+      return tier.heroStatus
+    end
+    return tier.hero
+  end
+end
+
 --- Map range percentage to a warning color.
 function Telemetry.rangeColor(pct)
   if pct > 90 then

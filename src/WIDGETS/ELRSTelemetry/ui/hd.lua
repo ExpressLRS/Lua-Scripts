@@ -23,8 +23,8 @@ WidgetUI.breakpoints = {
 WidgetUI.fonts = {
   sixth = { hero = BOLD },
   quarter = { hero = BOLD },
-  third = { hero = MIDSIZE, detail = SMLSIZE },
-  full = { hero = DBLSIZE, detail = 0 },
+  third = { hero = MIDSIZE, heroStatus = BOLD, detail = SMLSIZE },
+  full = { hero = MIDSIZE, heroStatus = 0, detail = 0 },
 }
 
 -- ============================================================================
@@ -70,7 +70,7 @@ function WidgetUI.buildSixth(w, h, opa)
         {
           type = lvgl.LABEL,
           y = lvgl.PAD_SMALL,
-          font = BOLD,
+          font = WidgetUI.fonts.sixth.hero,
           color = Telemetry.heroColor,
           text = heroTextLq,
         },
@@ -125,7 +125,7 @@ function WidgetUI.buildQuarter(w, h, opa)
           type = lvgl.LABEL,
           w = c1w,
           align = LEFT,
-          font = BOLD,
+          font = WidgetUI.fonts.quarter.hero,
           color = Telemetry.heroColor,
           text = heroTextLq,
         },
@@ -174,12 +174,7 @@ function WidgetUI.buildThird(w, h, opa)
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
-    font = function()
-      if Telemetry.statusText() then
-        return BOLD
-      end
-      return MIDSIZE
-    end,
+    font = Telemetry.heroFont(WidgetUI.fonts.third),
     color = Telemetry.heroColor,
     text = heroTextLq,
   }
@@ -207,12 +202,7 @@ local function appendDataRows(rows)
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
-    font = function()
-      if Telemetry.statusText() then
-        return 0
-      end
-      return MIDSIZE
-    end,
+    font = Telemetry.heroFont(WidgetUI.fonts.full),
     color = Telemetry.heroColor,
     text = heroTextLq,
   }

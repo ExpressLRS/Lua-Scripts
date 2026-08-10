@@ -25,7 +25,7 @@ WidgetUI.fonts = {
   sixth = { hero = BOLD },
   quarter = { hero = BOLD },
   third = { hero = BOLD, detail = SMLSIZE },
-  full = { hero = MIDSIZE, detail = SMLSIZE },
+  full = { hero = BOLD, detail = SMLSIZE },
 }
 
 -- ============================================================================
@@ -71,7 +71,7 @@ function WidgetUI.buildSixth(w, h, opa)
         {
           type = lvgl.LABEL,
           y = lvgl.PAD_SMALL,
-          font = BOLD,
+          font = WidgetUI.fonts.sixth.hero,
           color = Telemetry.heroColor,
           text = heroTextLq,
         },
@@ -125,7 +125,7 @@ function WidgetUI.buildQuarter(w, h, opa)
           type = lvgl.LABEL,
           w = c1w,
           align = LEFT,
-          font = BOLD,
+          font = WidgetUI.fonts.quarter.hero,
           color = Telemetry.heroColor,
           text = heroTextLq,
         },
@@ -193,9 +193,7 @@ local function appendDataRows(rows)
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
-    font = function()
-      return BOLD
-    end,
+    font = WidgetUI.fonts.full.hero,
     color = Telemetry.heroColor,
     text = heroTextLq,
   }
