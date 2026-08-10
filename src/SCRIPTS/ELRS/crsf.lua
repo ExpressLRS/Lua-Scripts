@@ -218,15 +218,20 @@ end
 -- ============================================================================
 
 --- Parse a null-terminated string from a CRSF data array.
--- Modifies data in-place (bytes -> chars) for efficiency.
+-- Modifies data in-place (bytes -> chars) for efficiency: poll() hands the
+-- same data table to every handler registered for a frame type, so a handler
+-- running after this one sees 1-char strings, not bytes, over
+-- [off, nextOffset - 2].
 -- @param data   array of byte values
 -- @param off    1-based start offset
 -- @return string, nextOffset
 function CRSF:fieldGetString(data, off)
   local startOff = off
-  while data[off] ~= 0 do
-    data[off] = string.char(data[off])
+  local b = data[off]
+  while b and b ~= 0 do
+    data[off] = string.char(b)
     off = off + 1
+    b = data[off]
   end
   return table.concat(data, nil, startOff, off - 1), off + 1
 end
@@ -268,15 +273,19 @@ local function onDeviceInfo(data)
   end
 
   local name, off = CRSF:fieldGetString(data, 3)
+  -- off is the first byte after the name's null terminator:
+  -- serNo (4) + hwVer (4) + swVer (4), where swVer's low 3 bytes are maj.min.rev
+  local vMaj, vMin, vRev = data[off + 9], data[off + 10], data[off + 11]
+  if not vRev then
+    return -- frame shorter than the layout; leave the cache so the ping retries
+  end
+
   local info = CRSF.deviceInfo
   info.name = name
-  -- off points past null terminator of name
-  -- serNo (4 bytes) + hwVer (4 bytes) + swVer (4 bytes) = 12 bytes
-  -- swVer is at off+8..off+11, but version fields are at specific offsets:
-  info.vMaj = data[off + 9]
-  info.vMin = data[off + 10]
-  info.vRev = data[off + 11]
-  info.vStr = string.format("%s (%d.%d.%d)", info.name, info.vMaj, info.vMin, info.vRev)
+  info.vMaj = vMaj
+  info.vMin = vMin
+  info.vRev = vRev
+  info.vStr = string.format("%s (%d.%d.%d)", name, vMaj, vMin, vRev)
 
   -- RFMOD / RFRSSI lookup tables (version-dependent)
   if info.vMaj == 4 then
@@ -398,18 +407,16 @@ end
 
 -- ELRS_STATUS handler: updates hasTelemetry, modelMismatch, elrsFlagsInfo
 local function onElrsStatus(data)
+  if data[2] ~= CRSF.CONST.ADDRESS_TX then
+    return
+  end
+
   CRSF.elrsFlags = data[6] or 0
   CRSF.hasTelemetry = bit32.btest(CRSF.elrsFlags, 1)
   CRSF.modelMismatch = bit32.btest(CRSF.elrsFlags, 4)
 
-  -- Parse null-terminated warning info string starting at data[7]
-  local parts = {}
-  local off = 7
-  while data[off] and data[off] ~= 0 do
-    parts[#parts + 1] = string.char(data[off])
-    off = off + 1
-  end
-  CRSF.elrsFlagsInfo = table.concat(parts)
+  -- Null-terminated warning info string starts at data[7]
+  CRSF.elrsFlagsInfo = CRSF:fieldGetString(data, 7)
 end
 
 -- Register built-in handlers
