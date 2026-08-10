@@ -635,6 +635,15 @@ function Presets.process()
     return
   end
 
+  -- Only consume a position once a write can actually land. writeConfig() drops
+  -- everything outside STATE_READY, and lastPos is latched before it is called, so
+  -- latching any earlier discards the position permanently -- during a send, and during
+  -- discovery whenever it outruns the debounce. Holding until ready is also what makes
+  -- the first tick after discovery assert the boot position to the module.
+  if not Protocol.isReady() then
+    return
+  end
+
   -- Edge-triggered: only send on position change
   if pos == Presets.lastPos then
     return
