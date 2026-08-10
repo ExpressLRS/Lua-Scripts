@@ -9,6 +9,11 @@
 -- Returns a table with { pop, push, moduleFound } fields.
 -- ============================================================================
 
+-- B&W radios ship without the table library, so every table.* call here goes
+-- through the shared ELRS compat layer. Loading this eagerly is safe: the ELRS
+-- library is always installed, while this mock is dev-only.
+local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
+
 -- ============================================================================
 -- Configuration: Change scenario here to test different states
 -- ============================================================================
@@ -121,30 +126,6 @@ local queueHead = 1
 local deferredQueue = {}
 local deferredReady = false
 
--- BW/FreedomTX compatibility: provide a local analogue to table.remove().
--- Supports remove(tbl) and remove(tbl, idx) semantics.
-local function tableRemove(tbl, idx)
-  if table and table.remove then
-    return table.remove(tbl, idx)
-  end
-
-  local n = #tbl
-  local pos = idx
-  if pos == nil then
-    pos = n
-  end
-  if pos < 1 or pos > n then
-    return nil
-  end
-
-  local removed = tbl[pos]
-  for i = pos, n - 1 do
-    tbl[i] = tbl[i + 1]
-  end
-  tbl[n] = nil
-  return removed
-end
-
 -- Slow loading scenario: time-delayed response queue.
 -- PARAMETER_READ responses are held here until their delivery time, then
 -- promoted to the main queue so the Lua script sees realistic latency.
@@ -184,7 +165,7 @@ local function queuePop()
 
   -- Serve deferred packets only after a nil has been returned (next poll cycle)
   if deferredReady and #deferredQueue > 0 then
-    local pkt = tableRemove(deferredQueue, 1)
+    local pkt = shim.tableRemove(deferredQueue, 1)
     ---@diagnostic disable-next-line: need-check-nil
     return pkt.command, pkt.data
   end
@@ -396,10 +377,10 @@ end
 local ALLAUX_UPDOWN = (function()
   local opts = {}
   for i = 1, 10 do
-    opts[#opts + 1] = table.concat({ "AUX", i, "\192" })
-    opts[#opts + 1] = table.concat({ "AUX", i, "\193" })
+    opts[#opts + 1] = shim.tableConcat({ "AUX", i, "\192" })
+    opts[#opts + 1] = shim.tableConcat({ "AUX", i, "\193" })
   end
-  return table.concat(opts, ";")
+  return shim.tableConcat(opts, ";")
 end)()
 
 local txDevice = {
@@ -512,7 +493,7 @@ local txDevice = {
       parent = 10,
       type = CRSF.TEXT_SELECTION,
       name = "Pitmode",
-      options = table.concat({ "Off;On;", ALLAUX_UPDOWN }),
+      options = shim.tableConcat({ "Off;On;", ALLAUX_UPDOWN }),
       value = 0,
       units = "",
     },
@@ -1216,7 +1197,7 @@ local function mockPush(command, data)
               chars[#chars + 1] = data[i]
               i = i + 1
             end
-            param.value = (#chars > 0) and string.char(table.unpack(chars)) or ""
+            param.value = shim.charsToString(chars)
             -- Bind Phrase: mirror into the Phrase Echo INFO sibling so the UI only
             -- reflects the change if the STRING write reloads sibling fields.
             if param.id == 20 then
@@ -1313,7 +1294,7 @@ local function mockPop()
   local i = 1
   while i <= #delayedResponseQueue do
     if now >= delayedResponseQueue[i].deliverAt then
-      local entry = tableRemove(delayedResponseQueue, i)
+      local entry = shim.tableRemove(delayedResponseQueue, i)
       ---@diagnostic disable-next-line: need-check-nil
       queuePush(entry.command, entry.data)
     else

@@ -2,7 +2,8 @@
 -- B&W Compatibility Layer                                               --
 --                                                                       --
 -- Polyfills for standard Lua library functions missing on B&W radios    --
--- (table.concat, table.remove) and shared helpers (sensor value cache). --
+-- (table.concat, table.remove) and shared helpers (byte-array decoding, --
+-- sensor value cache).                                                  --
 --                                                                       --
 -- Lives in /SCRIPTS/ELRS/ alongside crsf.lua so it is available to     --
 -- both color widgets and B&W telemetry scripts.                         --
@@ -59,6 +60,22 @@ else
     t[n] = nil
     return val
   end
+end
+
+-- ============================================================================
+-- Byte array -> string
+-- Stands in for string.char(table.unpack(t)), which needs the table library.
+-- Deliberately iterative: a pure-Lua unpack has to recurse once per element
+-- (and `return t[i], f(...)` is not a tail call, so it cannot be optimised
+-- away), which is not something to hand EdgeTX's Lua stack.
+-- ============================================================================
+
+function shim.charsToString(t, i, j)
+  local parts = {}
+  for k = i or 1, j or #t do
+    parts[#parts + 1] = string.char(t[k])
+  end
+  return shim.tableConcat(parts)
 end
 
 -- ============================================================================
