@@ -554,7 +554,16 @@ local function buildFullScreen()
     if not Telemetry.isDiversity then
       return "N/A"
     end
-    return (Telemetry.link.ant == 1) and "2" or "1"
+    -- EdgeTX's telemetry list prints the raw ANT enum (0/1) and so does the TX
+    -- module's own screen. The "Ant " prefix keeps this row from reading as that
+    -- same number, and 1/2 matches the RSSI 1 / RSSI 2 rows above.
+    if Telemetry.link.ant == 0 then
+      return "Ant 1"
+    end
+    if Telemetry.link.ant == 1 then
+      return "Ant 2"
+    end
+    return "--"
   end)
 
   createDisplayRow(fields, "Range", function()

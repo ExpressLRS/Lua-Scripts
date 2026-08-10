@@ -61,10 +61,10 @@ The simulator supports multiple test scenarios, configurable via the `config.sce
 
 | Scenario | Description |
 |----------|-------------|
-| `normal` | TX + RX connected. Happy path with full telemetry and all parameters. |
+| `normal` | TX + RX connected. Happy path with full telemetry and all parameters. `ANT` alternates between 1 and 0 every ~5 seconds so both antenna branches render. |
 | `no_telemetry` | TX present but no RX telemetry. Shows "No telemetry" state. |
 | `reconnect` | Starts disconnected, transitions to connected after ~5 seconds. |
 | `model_mismatch` | TX + RX connected with Model ID mismatch flag. Triggers warning dialog. |
-| `armed` | TX + RX connected with "is Armed" warning flag. |
+| `armed` | TX + RX connected with "is Armed" warning flag. `ANT` is pinned to 0, which keeps the telemetry widget's non-diversity "N/A" state reachable. |
 | `slow_loading` | Parameter reads delayed by ~2 seconds each. Tests loading UI states. |
 | `no_module` | No CRSF module found. Triggers "No Module Found" error dialog. |

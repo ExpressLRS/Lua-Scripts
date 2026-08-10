@@ -1427,6 +1427,21 @@ local sensorJitter = {
   Alt = 5,
 }
 
+-- Per-scenario sensors that step through a fixed sequence instead of jittering,
+-- so both branches of an enum sensor are reachable within one simulator run.
+-- Takes precedence over sensorJitter and over the scenario's base value; one
+-- entry is consumed per cache refresh, i.e. one per second.
+-- Only normal cycles ANT: armed keeps it pinned to 0 so the widget's
+-- non-diversity "N/A" state stays reachable somewhere.
+local sensorToggle = {
+  normal = {
+    -- Starts on antenna 2 so the widget's diversity latch fires immediately,
+    -- then falls back so the antenna 1 branch renders too.
+    ANT = { 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 }, -- ~5 s per antenna
+  },
+}
+local toggleStep = 0
+
 -- Telemetry values are cached and only refreshed once per second to match
 -- realistic sensor update rates and avoid excessive CPU in the simulator.
 local telemetryCache = {}
@@ -1458,9 +1473,14 @@ local function updateTelemetryCache()
   end
 
   telemetryCache = {}
+  toggleStep = toggleStep + 1
+  local toggles = sensorToggle[config.scenario]
   for sensorId, base in pairs(t) do
+    local seq = toggles and toggles[sensorId]
     local jit = sensorJitter[sensorId]
-    if jit then
+    if seq then
+      telemetryCache[sensorId] = seq[(toggleStep % #seq) + 1]
+    elseif jit then
       local val = base + (math.random() * 2 - 1) * jit
       if jit == math.floor(jit) then
         val = math.floor(val + 0.5)
