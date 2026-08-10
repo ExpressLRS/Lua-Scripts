@@ -31,13 +31,6 @@ WidgetUI.fonts = {
 -- Minimized display helpers
 -- ============================================================================
 
-local function heroColorMismatch()
-  if crsf.modelMismatch then
-    return RED
-  end
-  return COLOR_THEME_PRIMARY1
-end
-
 local function detailColor()
   if not crsf.hasTelemetry then
     return COLOR_THEME_SECONDARY1
@@ -78,7 +71,7 @@ function WidgetUI.buildSixth(w, h, opa)
           type = lvgl.LABEL,
           y = lvgl.PAD_SMALL,
           font = BOLD,
-          color = heroColorMismatch,
+          color = Telemetry.heroColor,
           text = heroTextLq,
         },
       },
@@ -133,7 +126,7 @@ function WidgetUI.buildQuarter(w, h, opa)
           w = c1w,
           align = LEFT,
           font = BOLD,
-          color = heroColorMismatch,
+          color = Telemetry.heroColor,
           text = heroTextLq,
         },
         {
@@ -187,7 +180,7 @@ function WidgetUI.buildThird(w, h, opa)
       end
       return MIDSIZE
     end,
-    color = heroColorMismatch,
+    color = Telemetry.heroColor,
     text = heroTextLq,
   }
   rows[#rows + 1] = {
@@ -220,7 +213,7 @@ local function appendDataRows(rows)
       end
       return MIDSIZE
     end,
-    color = heroColorMismatch,
+    color = Telemetry.heroColor,
     text = heroTextLq,
   }
   rows[#rows + 1] = {

@@ -9,6 +9,14 @@ local Telemetry = ctx.Telemetry
 
 local TopBarUI = {}
 
+--- Top bar sits on the dark header, so it needs PRIMARY2 rather than Telemetry.heroColor's PRIMARY1.
+local function mismatchColor()
+  if Telemetry.isMismatch() then
+    return RED
+  end
+  return COLOR_THEME_PRIMARY2
+end
+
 --- Top bar: two lines stacked, no background.
 function TopBarUI.build(w, h)
   lvgl.build({
@@ -26,12 +34,7 @@ function TopBarUI.build(w, h)
           type = lvgl.LABEL,
           align = CENTER,
           font = SMLSIZE,
-          color = function()
-            if crsf.modelMismatch then
-              return RED
-            end
-            return COLOR_THEME_PRIMARY2
-          end,
+          color = mismatchColor,
           text = function()
             if not crsf.hasTelemetry then
               return "--"
@@ -46,12 +49,7 @@ function TopBarUI.build(w, h)
           type = lvgl.LABEL,
           align = CENTER,
           font = SMLSIZE,
-          color = function()
-            if crsf.modelMismatch then
-              return RED
-            end
-            return COLOR_THEME_PRIMARY2
-          end,
+          color = mismatchColor,
           text = function()
             if not crsf.hasTelemetry then
               return "--"

@@ -90,6 +90,13 @@ function Telemetry.hasModule()
   return crsf.hasCrsfModule()
 end
 
+--- True when a connected link is reporting a model mismatch.
+--- modelMismatch arrives in the same ELRS_STATUS frame as hasTelemetry, so it only means
+--- anything while connected: ungated, a stale flag paints a label RED under text reading "--".
+function Telemetry.isMismatch()
+  return crsf.hasTelemetry and crsf.modelMismatch
+end
+
 --- Short status text when not operational or warning active.
 --- Returns nil when connected with no warnings.
 --- Used by both full-screen and minimized UIs.
@@ -204,6 +211,14 @@ function Telemetry.update()
   end
 end
 
+--- Hero label colour: red only while a connected link reports a model mismatch.
+function Telemetry.heroColor()
+  if Telemetry.isMismatch() then
+    return RED
+  end
+  return COLOR_THEME_PRIMARY1
+end
+
 --- Map range percentage to a warning color.
 function Telemetry.rangeColor(pct)
   if pct > 90 then
@@ -228,12 +243,17 @@ function Telemetry.signalText()
   return table.concat(parts, " ")
 end
 
+--- RF mode text (e.g. "250Hz"). Narrow zones use this without the power suffix.
+function Telemetry.rfModeText()
+  return Telemetry.getRfModeStr(Telemetry.link.rfmd)
+end
+
 --- RF mode + TX power text (e.g. "250Hz 50mW").
 function Telemetry.rfDetailText()
-  local tlm = Telemetry.link
-  local parts = { Telemetry.getRfModeStr(tlm.rfmd) }
-  if crsf.hasTelemetry and tlm.tpwr then
-    parts[#parts + 1] = table.concat({ tostring(tlm.tpwr), "mW" })
+  local parts = { Telemetry.rfModeText() }
+  local tpwr = Telemetry.link.tpwr
+  if crsf.hasTelemetry and tpwr then
+    parts[#parts + 1] = table.concat({ tostring(tpwr), "mW" })
   end
   return table.concat(parts, " ")
 end
@@ -468,18 +488,14 @@ local function buildFullScreen()
       font = BOLD,
       color = RED,
       text = "Model Mismatch — RC commands not sent",
-      visible = function()
-        return crsf.modelMismatch
-      end,
+      visible = Telemetry.isMismatch,
     },
   })
 
   -- Link Status section
   createSectionHeader(fields, "Link Status")
 
-  createDisplayRow(fields, "RF Mode", function()
-    return Telemetry.getRfModeStr(Telemetry.link.rfmd)
-  end)
+  createDisplayRow(fields, "RF Mode", Telemetry.rfModeText)
 
   createDisplayRow(fields, "Link Quality", function()
     if not crsf.hasTelemetry then
