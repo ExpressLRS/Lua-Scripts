@@ -120,6 +120,9 @@ end
 
 local UI
 
+-- Module table, forward-declared so init() can drop itself once it has run.
+local M = {}
+
 local function init()
   local deps = {
     App = App,
@@ -134,6 +137,11 @@ local function init()
   end
   UI.init()
   setMock()
+  -- The returned table stays on the standalone Lua stack and pins init(), which holds
+  -- setMock as an upvalue. Drop both.
+  ---@diagnostic disable-next-line: cast-local-type
+  setMock = nil
+  M.init = nil
 end
 
 -- ============================================================================
@@ -206,4 +214,7 @@ end
 -- Return
 -- ============================================================================
 
-return { init = init, run = run, useLvgl = useLvgl }
+M.init = init
+M.run = run
+M.useLvgl = useLvgl
+return M

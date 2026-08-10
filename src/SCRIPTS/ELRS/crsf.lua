@@ -148,6 +148,8 @@ local function setMock()
 end
 
 setMock()
+---@diagnostic disable-next-line: cast-local-type
+setMock = nil
 
 -- ============================================================================
 -- Handler registry
