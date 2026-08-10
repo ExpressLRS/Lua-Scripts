@@ -609,7 +609,7 @@ local txDevice = {
 
 local rxDevice = {
   id = CRSF.ADDRESS_RX,
-  name = "ELRS 2400RX",
+  name = "Bob 2400RX",
   serialNo = CRSF.ELRS_SERIAL_ID,
   hwVer = 0,
   swVer = 0x00030500, -- 3.5.0

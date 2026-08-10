@@ -9,13 +9,6 @@ local Telemetry = ctx.Telemetry
 
 local TopBarUI = {}
 
-local function getRssi(tlm)
-  if not tlm then
-    return nil
-  end
-  return (tlm.ant == 1) and tlm.rssi2 or tlm.rssi1
-end
-
 --- Top bar: two lines stacked, no background.
 function TopBarUI.build(w, h)
   lvgl.build({
@@ -40,14 +33,13 @@ function TopBarUI.build(w, h)
             return COLOR_THEME_PRIMARY2
           end,
           text = function()
-            if crsf.modelMismatch then
-              return "Model"
-            end
             if not crsf.hasTelemetry then
               return "--"
             end
-            local tlm = Telemetry.readLink()
-            return table.concat({ "LQ ", tostring(tlm.rqly or 0), "%" })
+            if crsf.modelMismatch then
+              return "Model"
+            end
+            return table.concat({ "LQ ", tostring(Telemetry.link.rqly or 0), "%" })
           end,
         },
         {
@@ -61,14 +53,13 @@ function TopBarUI.build(w, h)
             return COLOR_THEME_PRIMARY2
           end,
           text = function()
-            if crsf.modelMismatch then
-              return "Mismatch"
-            end
             if not crsf.hasTelemetry then
               return "--"
             end
-            local tlm = Telemetry.readLink()
-            local rssi = getRssi(tlm)
+            if crsf.modelMismatch then
+              return "Mismatch"
+            end
+            local rssi = Telemetry.getRssi(Telemetry.link)
             if rssi == nil then
               return ""
             end

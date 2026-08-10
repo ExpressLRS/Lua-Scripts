@@ -21,17 +21,28 @@ Telemetry = {
   -- Smoothed range percentage
   smoothRng = nil,
 
+  -- Range percentage, recomputed once per tick by Telemetry.update()
+  rangePct = 0,
+
   -- Cell count detection state
   cellCnt = nil,
-  cellCntCnt = 0,
+  ---@type number|nil
+  cellCntCnt = nil,
   cellLastV = nil,
 
   -- Diversity detection
   isDiversity = false,
 
+  -- Connection state, used to detect the falling edge on disconnect
+  wasConnected = false,
+
   -- Cached GPS position (persists across disconnects)
   ---@type {lat: number, lon: number}|nil
   gps = nil,
+
+  -- Shared link snapshot, refilled once per tick by Telemetry.update().
+  -- The table identity never changes, so consumers may cache a reference.
+  link = {},
 
   -- Power level mapping table
   POWERS = { 10, 25, 50, 100, 250, 500, 1000, 2000 },
@@ -49,11 +60,14 @@ end
 
 --- Cell count detection heuristic (same logic as original).
 function Telemetry.checkCellCount(v)
+  -- once the cellCnt is the same X times in a row, stop updating
   if (Telemetry.cellCntCnt or 0) > 5 then
     return
   end
 
+  -- try to lock on to the cell count, so as the voltage sags we don't change S
   local cellCnt = math.floor(v / 4.35) + 1
+  -- Prevent lock on when no voltage is present
   if (v / cellCnt) < 3.0 then
     return
   end
@@ -62,24 +76,13 @@ function Telemetry.checkCellCount(v)
     Telemetry.cellCnt = cellCnt
     Telemetry.cellCntCnt = 0
   else
+    -- The value has to change to count as an update
     if Telemetry.cellLastV == v then
       return
     end
     Telemetry.cellLastV = v
     Telemetry.cellCntCnt = Telemetry.cellCntCnt + 1
   end
-end
-
---- Read all link telemetry values into a table.
-function Telemetry.readLink()
-  return {
-    tpwr = crsf.getSensorValue("TPWR"),
-    rfmd = crsf.getSensorValue("RFMD"),
-    rssi1 = crsf.getSensorValue("1RSS"),
-    rssi2 = crsf.getSensorValue("2RSS"),
-    rqly = crsf.getSensorValue("RQly"),
-    ant = crsf.getSensorValue("ANT"),
-  }
 end
 
 --- Check if a CRSF/ELRS module is available.
@@ -149,12 +152,56 @@ function Telemetry.updateDiversity(ant)
   end
 end
 
---- Pick the active antenna's RSSI value from a readLink() result.
+--- Pick the active antenna's RSSI value from a link snapshot.
 function Telemetry.getRssi(tlm)
   if not tlm then
     return nil
   end
   return (tlm.ant == 1) and tlm.rssi2 or tlm.rssi1
+end
+
+--- Clear per-connection state.
+--- The original discarded its whole ctx table on RX disconnect, so cell count and
+--- range smoothing re-detect on the next battery instead of latching forever.
+--- gps is deliberately kept — the port caches last-known position across dropouts.
+function Telemetry.resetConnection()
+  Telemetry.smoothRng = nil
+  Telemetry.rangePct = 0
+  Telemetry.cellCnt = nil
+  Telemetry.cellCntCnt = nil
+  Telemetry.cellLastV = nil
+  Telemetry.isDiversity = false
+end
+
+--- Refill the shared link snapshot and recompute all derived state.
+--- Called once per tick from wgt.background(). EdgeTX runs wgt.refresh() immediately
+--- before it evaluates every LVGL text/color callback, so labels always read values
+--- sampled in their own frame and every field sees the same snapshot.
+function Telemetry.update()
+  local link = Telemetry.link
+  link.tpwr = crsf.getSensorValue("TPWR")
+  link.rfmd = crsf.getSensorValue("RFMD")
+  link.rssi1 = crsf.getSensorValue("1RSS")
+  link.rssi2 = crsf.getSensorValue("2RSS")
+  link.rqly = crsf.getSensorValue("RQly")
+  link.ant = crsf.getSensorValue("ANT")
+  link.vbat = crsf.getSensorValue("RxBt")
+
+  local connected = crsf.hasTelemetry
+  if Telemetry.wasConnected and not connected then
+    Telemetry.resetConnection()
+  end
+  Telemetry.wasConnected = connected
+  if not connected then
+    return
+  end
+
+  Telemetry.updateDiversity(link.ant)
+  Telemetry.updateGps()
+  Telemetry.rangePct = Telemetry.getRangePct(link)
+  if link.vbat then
+    Telemetry.checkCellCount(link.vbat)
+  end
 end
 
 --- Map range percentage to a warning color.
@@ -173,10 +220,8 @@ function Telemetry.signalText()
   if not crsf.hasTelemetry then
     return ""
   end
-  local tlm = Telemetry.readLink()
-  local pct = Telemetry.getRangePct(tlm)
-  local parts = { table.concat({ "Range ", tostring(pct), "%" }) }
-  local rssi = Telemetry.getRssi(tlm)
+  local parts = { table.concat({ "Range ", tostring(Telemetry.rangePct), "%" }) }
+  local rssi = Telemetry.getRssi(Telemetry.link)
   if rssi then
     parts[#parts + 1] = table.concat({ tostring(rssi), "dBm" })
   end
@@ -185,13 +230,38 @@ end
 
 --- RF mode + TX power text (e.g. "250Hz 50mW").
 function Telemetry.rfDetailText()
-  local tlm = Telemetry.readLink()
-  local mode = Telemetry.getRfModeStr(tlm.rfmd)
-  local parts = { mode }
+  local tlm = Telemetry.link
+  local parts = { Telemetry.getRfModeStr(tlm.rfmd) }
   if crsf.hasTelemetry and tlm.tpwr then
     parts[#parts + 1] = table.concat({ tostring(tlm.tpwr), "mW" })
   end
   return table.concat(parts, " ")
+end
+
+--- Battery text for minimized layouts (e.g. "Bat 4S 3.80V").
+function Telemetry.batteryText()
+  local vbat = Telemetry.link.vbat
+  if vbat == nil or vbat <= 0 then
+    return ""
+  end
+  local cells = Telemetry.cellCnt
+  if cells then
+    return string.format("Bat %dS %.2fV", cells, vbat / cells)
+  end
+  return string.format("Bat %.2fV", vbat)
+end
+
+--- Battery text for the full-screen row (e.g. "4S 3.80V (15.20V)").
+function Telemetry.batteryTextVerbose()
+  local vbat = Telemetry.link.vbat
+  if vbat == nil or vbat <= 0 then
+    return "--"
+  end
+  local cells = Telemetry.cellCnt
+  if cells then
+    return string.format("%dS %.2fV (%.2fV)", cells, vbat / cells, vbat)
+  end
+  return string.format("%.2fV", vbat)
 end
 
 -- ============================================================================
@@ -408,38 +478,36 @@ local function buildFullScreen()
   createSectionHeader(fields, "Link Status")
 
   createDisplayRow(fields, "RF Mode", function()
-    local tlm = Telemetry.readLink()
-    return Telemetry.getRfModeStr(tlm.rfmd)
+    return Telemetry.getRfModeStr(Telemetry.link.rfmd)
   end)
 
   createDisplayRow(fields, "Link Quality", function()
     if not crsf.hasTelemetry then
       return "--"
     end
-    local tlm = Telemetry.readLink()
-    return table.concat({ tostring(tlm.rqly or 0), "%" })
+    return table.concat({ tostring(Telemetry.link.rqly or 0), "%" })
   end)
 
   createDisplayRow(fields, "RSSI 1", function()
     if not crsf.hasTelemetry then
       return "--"
     end
-    local tlm = Telemetry.readLink()
-    if tlm.rssi1 == nil then
+    local rssi1 = Telemetry.link.rssi1
+    if rssi1 == nil then
       return "--"
     end
-    return table.concat({ tostring(tlm.rssi1), " dBm" })
+    return table.concat({ tostring(rssi1), " dBm" })
   end)
 
   createDisplayRow(fields, "RSSI 2", function()
     if not crsf.hasTelemetry then
       return "--"
     end
-    local tlm = Telemetry.readLink()
-    if tlm.rssi2 == nil then
+    local rssi2 = Telemetry.link.rssi2
+    if rssi2 == nil then
       return "--"
     end
-    return table.concat({ tostring(tlm.rssi2), " dBm" })
+    return table.concat({ tostring(rssi2), " dBm" })
   end, function()
     if not Telemetry.isDiversity then
       return COLOR_THEME_DISABLED
@@ -451,20 +519,17 @@ local function buildFullScreen()
     if not crsf.hasTelemetry then
       return "--"
     end
-    local tlm = Telemetry.readLink()
     if not Telemetry.isDiversity then
       return "N/A"
     end
-    return (tlm.ant == 1) and "2" or "1"
+    return (Telemetry.link.ant == 1) and "2" or "1"
   end)
 
   createDisplayRow(fields, "Range", function()
     if not crsf.hasTelemetry then
       return "--"
     end
-    local tlm = Telemetry.readLink()
-    local pct = Telemetry.getRangePct(tlm)
-    return table.concat({ tostring(pct), "%" })
+    return table.concat({ tostring(Telemetry.rangePct), "%" })
   end)
 
   -- Power section
@@ -474,39 +539,28 @@ local function buildFullScreen()
     if not crsf.hasTelemetry then
       return "--"
     end
-    local tlm = Telemetry.readLink()
-    if tlm.tpwr == nil then
+    local tpwr = Telemetry.link.tpwr
+    if tpwr == nil then
       return "--"
     end
-    return table.concat({ tostring(tlm.tpwr), " mW" })
+    return table.concat({ tostring(tpwr), " mW" })
   end)
 
   createDisplayRow(fields, "Power Index", function()
     if not crsf.hasTelemetry then
       return "--"
     end
-    local tlm = Telemetry.readLink()
-    if tlm.tpwr == nil then
+    local tpwr = Telemetry.link.tpwr
+    if tpwr == nil then
       return "--"
     end
-    return tostring(Telemetry.pwrToIdx(tlm.tpwr))
+    return tostring(Telemetry.pwrToIdx(tpwr))
   end)
 
   -- Flight Controller section
   createSectionHeader(fields, "Flight Controller")
 
-  createDisplayRow(fields, "Battery", function()
-    local vbat = crsf.getSensorValue("RxBt")
-    if vbat == nil or vbat <= 0 then
-      return "--"
-    end
-    Telemetry.checkCellCount(vbat)
-    local cells = Telemetry.cellCnt
-    if cells then
-      return string.format("%dS %.2fV (%.2fV)", cells, vbat / cells, vbat)
-    end
-    return string.format("%.2fV", vbat)
-  end)
+  createDisplayRow(fields, "Battery", Telemetry.batteryTextVerbose)
 
   createDisplayRow(fields, "Current", function()
     local curr = crsf.getSensorValue("Curr")
@@ -579,17 +633,11 @@ function wgt.background()
   crsf:poll()
   crsf:requestDeviceInfo()
   crsf:requestElrsStatus()
-  Telemetry.updateGps()
+  Telemetry.update()
 end
 
 function wgt.refresh(_event, _touchState)
   wgt.background()
-
-  -- Update diversity detection each tick
-  if crsf.hasTelemetry then
-    local tlm = Telemetry.readLink()
-    Telemetry.updateDiversity(tlm.ant)
-  end
 end
 
 function wgt.update(newOptions)
@@ -600,6 +648,10 @@ function wgt.update(newOptions)
     WidgetUI.build(wgt.zone, wgt.options)
   end
 end
+
+-- Populate the snapshot before the first paint: update() runs callRefs without a
+-- preceding refresh(), so label callbacks can fire before the first background tick.
+Telemetry.update()
 
 -- Initial build
 WidgetUI.build(wgt.zone, wgt.options)
