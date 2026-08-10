@@ -21,9 +21,9 @@ local Presets
 -- ============================================================================
 
 VTX = {
-  -- Band name lookup tables
-  -- selene: allow(mixed_table)
-  BAND_NAMES = { [0] = "Off", "A", "B", "E", "F", "R", "L" },
+  -- Band lookup tables. BAND_LETTERS is 1-based: band 0 has no letter, and its label
+  -- differs by context ("Off" for a disabled VTX, "--" for an unused 6POS preset slot).
+  BAND_LETTERS = { "A", "B", "E", "F", "R", "L" },
   BAND_VALUES = { Off = 0, A = 1, B = 2, E = 3, F = 4, R = 5, L = 6 },
 
   -- Field IDs (discovered at runtime)
@@ -885,11 +885,10 @@ function VTXDisplay.build6posLabels(font)
       end,
       text = function()
         local p = Presets.items[idx]
-        local band = VTX.BAND_NAMES[p.band] or "?"
-        if band == "Off" then
-          return table.concat({ idx, ":Off" })
+        if p.band == 0 then
+          return table.concat({ idx, ":--" })
         end
-        return table.concat({ idx, ":", band, p.channel })
+        return table.concat({ idx, ":", VTX.BAND_LETTERS[p.band] or "?", p.channel })
       end,
     }
   end
@@ -1247,7 +1246,7 @@ local function buildFullScreen()
 
   createHintRow(fields, "Assign a Band and Channel to each 6POS switch position.")
 
-  local bandValues = { "Off", "A", "B", "E", "F", "R", "L" }
+  local bandValues = { "--", "A", "B", "E", "F", "R", "L" }
   for i = 1, 6 do
     local idx = i
     local ctrl = createRow(fields, table.concat({ "Preset ", idx }))
