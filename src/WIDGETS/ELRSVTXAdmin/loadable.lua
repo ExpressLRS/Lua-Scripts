@@ -471,8 +471,9 @@ Presets = {
   stableTime = 0,
   DEBOUNCE = 20, -- 200ms in getTime() ticks (10ms each)
 
-  -- Push source edge detection state
-  pushLastVal = -1,
+  -- Push source edge detection state. nil until the first sample has been taken.
+  ---@type boolean?
+  pushLastHigh = nil,
 }
 
 -- ============================================================================
@@ -680,12 +681,18 @@ function Presets.processPushSource()
 
   local val = getValue(Presets.pushSource)
   if val == nil then
-    val = -1
+    return
   end
-  local high = val > 0
 
-  local wasHigh = Presets.pushLastVal > 0
-  Presets.pushLastVal = val
+  local high = val > 0
+  local wasHigh = Presets.pushLastHigh
+  Presets.pushLastHigh = high
+
+  if wasHigh == nil then
+    -- First sample after create or reassignment: adopt the level without firing. A
+    -- source that is already high was not just moved there by the user.
+    return
+  end
 
   -- Edge detection: trigger only on rising edge (low -> high)
   if high and not wasHigh then
@@ -1234,7 +1241,7 @@ local function buildFullScreen()
     end,
     function(v)
       Presets.pushSource = v or 0
-      Presets.pushLastVal = -1
+      Presets.pushLastHigh = nil
       Presets.save()
     end,
     lvgl.SRC_STICK + lvgl.SRC_POT + lvgl.SRC_SWITCH,
