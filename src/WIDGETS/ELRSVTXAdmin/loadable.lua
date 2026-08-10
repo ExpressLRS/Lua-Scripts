@@ -954,9 +954,9 @@ local function getScreenId()
   elseif w <= 320 then
     return "small" -- 320x240
   elseif h >= 320 then
-    return "sd_tall" -- 480x320 (TX16S)
+    return "sd_tall" -- 480x320 (T15, T15 Pro, TX15, ST16, PL18)
   else
-    return "sd" -- 480x272
+    return "sd" -- 480x272 (TX16S, MAX, Mk II)
   end
 end
 

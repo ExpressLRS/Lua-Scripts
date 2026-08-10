@@ -1,6 +1,6 @@
 ---------------------------------------------------------------------------
 -- ELRS Telemetry Widget - UI for 480x272 (SD)                          --
--- Standard definition landscape (TX15, T15 Pro, ST16, PL18, Horus)     --
+-- Standard definition landscape (TX16S, TX16S MAX, TX16S Mark II)      --
 ---------------------------------------------------------------------------
 
 local ctx = ...
