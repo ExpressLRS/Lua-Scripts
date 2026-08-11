@@ -51,6 +51,7 @@ local UI = {
   -- Redraw state
   forceRedraw = true,
   folderWasReady = false,
+  wasLoading = false,
 
   -- Warning flashing
   titleShowWarn = nil,
@@ -208,10 +209,15 @@ function UI.render(event, _touchState)
     return
   end
 
-  -- Force redraw during loading to show progress bar
-  if #Protocol.loadQueue > 0 then
+  -- Force redraw while the queue is loading, to show the progress bar, and once
+  -- more on the frame it empties. poll() pops the last entry before we get here,
+  -- so without the trailing edge the response that completes a reload never
+  -- reaches the screen and the page waits for the next event or warn tick.
+  local loading = #Protocol.loadQueue > 0
+  if loading or UI.wasLoading then
     UI.forceRedraw = true
   end
+  UI.wasLoading = loading
 
   -- Render: command popup or normal page
   if Protocol.fieldPopup ~= nil then
