@@ -156,9 +156,18 @@ Protocol = {
   writeIdx = 0,
   lastWriteTime = 0,
 
-  -- Folder re-read timer
-  lastFolderPoll = 0,
-  FOLDER_POLL_INTERVAL = 200, -- 2 seconds
+  -- Folder re-read: event-driven, never periodic. armFolderRead() sets the
+  -- deadline after our own writes and on resume from suspension; the folder
+  -- response clears it, and an unanswered read retries a bounded number of
+  -- times so a lost frame cannot leave the display stale.
+  ---@type number?
+  folderReadPending = nil,
+  folderReadAttempts = 0,
+  FOLDER_READ_RETRIES = 3,
+
+  -- Previous tick timestamp, to detect suspension: a standalone tool pauses
+  -- widget scripts, and whatever it changed needs one read-back on resume.
+  lastTick = 0,
 }
 
 -- State query helpers
@@ -184,6 +193,16 @@ end
 -- Response timeout for PARAMETER_READ: 0.5s for local TX module.
 function Protocol.fieldResponseTimeout()
   return 50
+end
+
+--- Arm a folder re-read `delay` ticks from now (0 = next tick).
+--- Every push replaces one RC-channels frame on the handset->module UART, so
+--- the folder is only ever read when something can have changed it: after our
+--- own writes, and once on resume from suspension. Sibling widget instances
+--- need nothing — every instance's onSettingsEntry sees every response.
+function Protocol.armFolderRead(delay)
+  Protocol.folderReadPending = getTime() + delay
+  Protocol.folderReadAttempts = 0
 end
 
 -- ============================================================================
@@ -309,6 +328,7 @@ function Protocol.onSettingsEntry(data)
     end
   elseif st == Protocol.STATE_READY then
     if fieldId == VTX.ids.folder then
+      Protocol.folderReadPending = nil
       VTX.parseFolderName(fieldName)
     end
   end
@@ -323,6 +343,15 @@ crsf:registerHandler(crsf.CONST.FRAMETYPE_PARAMETER_SETTINGS_ENTRY, Protocol.onS
 
 function Protocol.tick()
   local now = getTime()
+
+  -- A tick gap over a second means the widget was suspended — a standalone
+  -- tool had the screen and may have changed the module config — so read the
+  -- folder back once on resume.
+  if Protocol.lastTick > 0 and now - Protocol.lastTick > 100 and Protocol.state == Protocol.STATE_READY then
+    Protocol.armFolderRead(0)
+  end
+  Protocol.lastTick = now
+
   local st = Protocol.state
 
   if st == Protocol.STATE_INIT then
@@ -346,9 +375,14 @@ function Protocol.tick()
       Protocol.fieldTimeout = now + Protocol.fieldResponseTimeout()
     end
   elseif st == Protocol.STATE_READY then
-    if now - Protocol.lastFolderPoll >= Protocol.FOLDER_POLL_INTERVAL then
-      Protocol.lastFolderPoll = now
-      Protocol.sendParameterRead(VTX.ids.folder)
+    if Protocol.folderReadPending and now >= Protocol.folderReadPending then
+      if Protocol.folderReadAttempts < Protocol.FOLDER_READ_RETRIES then
+        Protocol.folderReadAttempts = Protocol.folderReadAttempts + 1
+        Protocol.folderReadPending = now + Protocol.fieldResponseTimeout()
+        Protocol.sendParameterRead(VTX.ids.folder)
+      else
+        Protocol.folderReadPending = nil
+      end
     end
   elseif st == Protocol.STATE_SENDING then
     if Protocol.writeIdx <= #Protocol.writeQueue then
@@ -364,7 +398,9 @@ function Protocol.tick()
       Protocol.writeQueue = {}
       Protocol.writeIdx = 0
       Protocol.state = Protocol.STATE_READY
-      Protocol.lastFolderPoll = now - Protocol.FOLDER_POLL_INTERVAL + 10
+      -- Read the folder back ~100ms after the last write so the module has
+      -- applied the change; the simulator defers folder-name updates ~20ms.
+      Protocol.armFolderRead(10)
     end
   end
 end

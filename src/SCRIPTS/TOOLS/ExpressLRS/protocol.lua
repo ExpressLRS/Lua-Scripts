@@ -88,15 +88,6 @@ function Protocol.reset()
   Protocol.hadTelemetry = false
 end
 
--- ============================================================================
--- Transport: the shared CRSF library (crsf.pop/push are rebound by its mock
--- in the simulator, so always call through the crsf table)
--- ============================================================================
-
-function Protocol.pingDevices()
-  crsf.push(crsf.CONST.FRAMETYPE_DEVICE_PING, { crsf.CONST.ADDRESS_BROADCAST, crsf.CONST.ADDRESS_HANDSET })
-end
-
 -- Check if telemetry is being received from the RX (elrsFlags bit 1)
 function Protocol.hasTelemetry()
   return bit32.btest(Protocol.elrsFlags, 1)
@@ -705,14 +696,14 @@ function Protocol.tick()
   -- Ping on telemetry transition (device may have changed)
   local hasTelemetry = Protocol.hasTelemetry()
   if hasTelemetry and not Protocol.hadTelemetry then
-    Protocol.pingDevices()
+    crsf:pingDevices()
   end
   Protocol.hadTelemetry = hasTelemetry
 
   local time = getTime()
   -- Periodic ping for initial device discovery
   if #Protocol.devices == 0 and time > Protocol.pingTimeout then
-    Protocol.pingDevices()
+    crsf:pingDevices()
     Protocol.pingTimeout = time + 100 -- 1s
   end
 

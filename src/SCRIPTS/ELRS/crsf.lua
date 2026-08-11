@@ -90,7 +90,12 @@ CRSF._handlers = {}
 -- Device info cache (populated by built-in DEVICE_INFO handler)
 CRSF.deviceInfo = {}
 
--- Telemetry state (populated by built-in ELRS_STATUS handler)
+-- Link state: hasTelemetry is derived from RQly in poll(); the rest comes
+-- from the ELRS_STATUS answer updateModelMatch() requests once per connection.
+-- elrsFlags/elrsFlagsInfo are therefore a connect-time snapshot: fine for
+-- model match, which is decided at connect, but stale for anything dynamic
+-- like the armed bit -- read the arm switch via getValue() for that, or poll
+-- like the tool does.
 CRSF.hasTelemetry = false
 CRSF.modelMismatch = false
 CRSF.elrsFlags = 0
@@ -104,6 +109,12 @@ CRSF._lastDevPoll = 0
 
 -- ELRS status polling
 CRSF._lastStatusPoll = 0
+
+-- Set once the current connection's ELRS_STATUS answer has arrived, so each
+-- connection is polled for model match at most once. Cleared with the rest of
+-- the per-connection state on any hasTelemetry edge in poll().
+---@type boolean?
+CRSF._statusAnswered = nil
 
 -- ============================================================================
 -- Default telemetry wrappers: delegate to real EdgeTX functions
@@ -132,16 +143,22 @@ end
 CRSF._vCache = {}
 
 --- Read a telemetry sensor value by name.
--- Caches the getFieldInfo string->ID lookup; getValue is called every time.
+-- Caches the getFieldInfo string->ID lookup once it succeeds; a sensor that is
+-- not discovered yet is retried on every call, so it starts reading as soon as
+-- EdgeTX creates it (e.g. sensor discovery running after the widget loaded).
+-- getValue is called every time.
 -- setMock() replaces this function with the simulator's mock telemetry.
 function CRSF.getSensorValue(id)
   local cid = CRSF._vCache[id]
   if cid == nil then
     local info = getFieldInfo(id)
-    cid = info and info.id or 0
+    if info == nil then
+      return nil
+    end
+    cid = info.id
     CRSF._vCache[id] = cid
   end
-  return cid ~= 0 and getValue(cid) or nil
+  return getValue(cid)
 end
 
 -- ============================================================================
@@ -232,6 +249,22 @@ function CRSF:poll()
       end
     end
   end
+
+  -- Connection state is derived from link quality at zero wire cost: the ELRS
+  -- TX zeroes RQly on disconnect, so a present, positive value is the truth
+  -- about the link. Runs after the drain so an ELRS_STATUS frame from a dying
+  -- connection is processed before the edge check, and any edge wipes the
+  -- per-connection state: a stale modelMismatch can neither survive a
+  -- disconnect nor suppress the next connection's status poll via a
+  -- late-arriving answer.
+  local connected = (CRSF.getSensorValue("RQly") or 0) > 0
+  if connected ~= self.hasTelemetry then
+    self.modelMismatch = false
+    self.elrsFlags = 0
+    self.elrsFlagsInfo = ""
+    self._statusAnswered = nil
+    self.hasTelemetry = connected
+  end
 end
 
 -- ============================================================================
@@ -257,8 +290,22 @@ function CRSF:fieldGetString(data, off)
   return shim.tableConcat(data, nil, startOff, off - 1), off + 1
 end
 
---- Send a DEVICE_PING if device info is not yet available.
--- Rate-limited to at most once per second.
+--- Send a DEVICE_PING.
+-- A ping addressed to a specific device is answered on the handset UART and
+-- never forwarded over the air; a broadcast ping is also forwarded to the RX
+-- while the link is up, costing over-the-air round trips. Broadcast only when
+-- discovering remote devices.
+-- @param dest  CRSF device address (use CRSF.CONST.ADDRESS_*); nil broadcasts
+function CRSF:pingDevices(dest)
+  CRSF.push(CRSF.CONST.FRAMETYPE_DEVICE_PING, { dest or CRSF.CONST.ADDRESS_BROADCAST, CRSF.CONST.ADDRESS_HANDSET })
+end
+
+--- Ask the TX module for its DEVICE_INFO if it is not cached yet.
+-- Addressed to the module itself, so it stays off the air. EdgeTX pings once
+-- at module init, but that answer lands before any widget's Lua queue exists
+-- (queues are created lazily on the first crossfireTelemetryPop), so widgets
+-- must ask themselves. Rate-limited to at most once per second, permanently
+-- quiet once answered.
 function CRSF:requestDeviceInfo()
   if self.deviceInfo.name then
     return
@@ -268,19 +315,46 @@ function CRSF:requestDeviceInfo()
     return
   end
   self._lastDevPoll = now
-  CRSF.push(CRSF.CONST.FRAMETYPE_DEVICE_PING, { CRSF.CONST.ADDRESS_BROADCAST, CRSF.CONST.ADDRESS_HANDSET })
+  self:pingDevices(CRSF.CONST.ADDRESS_TX)
 end
 
 --- Request ELRS status from the TX module (PARAMETER_WRITE with fieldId=0).
--- Updates hasTelemetry via the ELRS_STATUS handler on the next poll().
--- Rate-limited to at most once per second.
+-- The module answers with an ELRS_STATUS frame carrying its warning flags.
 function CRSF:requestElrsStatus()
+  CRSF.push(CRSF.CONST.FRAMETYPE_PARAMETER_WRITE, { CRSF.CONST.ADDRESS_TX, CRSF.CONST.ADDRESS_HANDSET_ELRS, 0, 0 })
+end
+
+--- RSSI of the antenna currently in use, or nil while unknown.
+function CRSF.getActiveRssi()
+  local ant = CRSF.getSensorValue("ANT")
+  return (ant == 1) and CRSF.getSensorValue("2RSS") or CRSF.getSensorValue("1RSS")
+end
+
+-- Weakest link updateModelMatch() will spend a frame on: a mismatch is caught
+-- next to the quad, and on a marginal link every RC-channels frame matters.
+local MODEL_MATCH_MIN_RSSI = -70
+
+--- Keep modelMismatch current at about one status request per connection.
+-- requestElrsStatus() is answered locally, but still replaces one RC-channels
+-- frame on the handset->module UART, so it is sent only when it can matter
+-- and can be afforded: while connected, from a module that identifies as
+-- ExpressLRS (other CRSF modules never answer the fieldId=0 convention), on
+-- a strong link, and only until the current connection's answer arrives.
+-- Retries at most once per second while unanswered.
+function CRSF:updateModelMatch()
+  if not (self.hasTelemetry and self.deviceInfo.isElrs) or self._statusAnswered then
+    return
+  end
+  local rssi = CRSF.getActiveRssi()
+  if rssi == nil or rssi <= MODEL_MATCH_MIN_RSSI then
+    return
+  end
   local now = getTime()
-  if now - (self._lastStatusPoll or 0) < 100 then
+  if now - self._lastStatusPoll < 100 then
     return
   end
   self._lastStatusPoll = now
-  CRSF.push(CRSF.CONST.FRAMETYPE_PARAMETER_WRITE, { CRSF.CONST.ADDRESS_TX, CRSF.CONST.ADDRESS_HANDSET_ELRS, 0, 0 })
+  self:requestElrsStatus()
 end
 
 -- ============================================================================
@@ -307,6 +381,13 @@ local function onDeviceInfo(data)
   info.vMin = vMin
   info.vRev = vRev
   info.vStr = string.format("%s (%d.%d.%d)", name, vMaj, vMin, vRev)
+
+  -- Serial number "ELRS" identifies an ExpressLRS module. Other CRSF modules
+  -- answer DEVICE_PING too, but only ELRS answers the fieldId=0 status request.
+  local serial = ((data[off] * 256 + data[off + 1]) * 256 + data[off + 2]) * 256 + data[off + 3]
+  if serial == CRSF.CONST.ELRS_SERIAL_ID then
+    info.isElrs = true
+  end
 
   -- RFMOD / RFRSSI lookup tables (version-dependent)
   if info.vMaj == 4 then
@@ -426,14 +507,14 @@ local function onDeviceInfo(data)
   end
 end
 
--- ELRS_STATUS handler: updates hasTelemetry, modelMismatch, elrsFlagsInfo
+-- ELRS_STATUS handler: latches the answer, updates modelMismatch and elrsFlagsInfo
 local function onElrsStatus(data)
   if data[2] ~= CRSF.CONST.ADDRESS_TX then
     return
   end
 
+  CRSF._statusAnswered = true
   CRSF.elrsFlags = data[6] or 0
-  CRSF.hasTelemetry = bit32.btest(CRSF.elrsFlags, 1)
   CRSF.modelMismatch = bit32.btest(CRSF.elrsFlags, 4)
 
   -- Null-terminated warning info string starts at data[7]

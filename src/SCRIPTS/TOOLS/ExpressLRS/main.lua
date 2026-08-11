@@ -91,7 +91,7 @@ function App.reloadAtRoot()
     Protocol.allocateFields()
     Protocol.reloadAllFields()
   end
-  Protocol.pingDevices()
+  crsf:pingDevices()
 end
 
 -- ============================================================================

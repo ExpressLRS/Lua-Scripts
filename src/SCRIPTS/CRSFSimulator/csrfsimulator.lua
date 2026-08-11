@@ -28,8 +28,17 @@ local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
 --                    reconnect without restarting the script.
 --   "model_mismatch" TX + RX connected but with Model ID mismatch flag set.
 --                    Triggers the Model Mismatch warning dialog.
+--   "mismatch_cycle" Model-mismatch link that drops and returns (~10 s up,
+--                    ~5 s down, forever). Exercises the per-connection status
+--                    poll latch: one ELRS_STATUS request per connected phase,
+--                    and the mismatch warning must clear while the link is down.
+--   "weak_link"      TX + RX connected on a marginal link (RQly ~60, RSSI
+--                    ~-85 dBm). Both the model-match poll and the VTX Admin
+--                    folder poll must stay quiet here.
 --   "armed"          TX + RX connected with the "is Armed" warning flag set.
 --                    Shows armed warning in subtitle.
+--   "single_antenna" RX with a single RF path: 2RSS pinned to 0, so the
+--                    widgets report no diversity.
 --   "slow_loading"   TX + RX connected but PARAMETER_READ responses are
 --                    delayed by ~2 seconds each. Tests how the UI renders
 --                    during slow field discovery (e.g. "Loading..." states
@@ -1006,11 +1015,16 @@ end
 local function getElrsFlags()
   if config.scenario == "reconnect" then
     return isRxAvailable() and 0x01 or 0x00
-  elseif config.scenario == "model_mismatch" then
+  elseif config.scenario == "model_mismatch" or config.scenario == "mismatch_cycle" then
     return 0x05 -- connected + model mismatch
   elseif config.scenario == "armed" then
     return 0x09 -- connected + armed
-  elseif config.scenario == "normal" or config.scenario == "slow_loading" or config.scenario == "single_antenna" then
+  elseif
+    config.scenario == "normal"
+    or config.scenario == "slow_loading"
+    or config.scenario == "single_antenna"
+    or config.scenario == "weak_link"
+  then
     return 0x01 -- connected
   else
     return 0x00 -- no telemetry
@@ -1018,7 +1032,7 @@ local function getElrsFlags()
 end
 
 local function getElrsFlagsInfo()
-  if config.scenario == "model_mismatch" then
+  if config.scenario == "model_mismatch" or config.scenario == "mismatch_cycle" then
     return "Model Mismatch"
   elseif config.scenario == "armed" then
     return "[ ! Armed ! ]"
@@ -1109,17 +1123,34 @@ local function mockPush(command, data)
     startTime = getTime()
   end
 
-  if command == CRSF.FRAMETYPE_DEVICE_PING then
-    local destAddr = data[2] or CRSF.ADDRESS_HANDSET
+  -- One line per pushed frame, so a scenario run's wire traffic can be counted
+  -- from the log (steady-state silence is an empty grep).
+  print(shim.tableConcat({
+    "CRSFSIM push t=",
+    getTime(),
+    " cmd=",
+    command,
+    " dst=",
+    data and data[1] or "-",
+    " field=",
+    data and data[3] or "-",
+  }))
 
-    -- TX module responds immediately (local to handset)
-    queuePush(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(txDevice, destAddr))
+  if command == CRSF.FRAMETYPE_DEVICE_PING then
+    local dest = data[1] or CRSF.ADDRESS_BROADCAST
+    local replyTo = data[2] or CRSF.ADDRESS_HANDSET
+
+    -- Frames addressed to the TX module are answered on the handset UART and
+    -- never forwarded over the air, so only a broadcast ping reaches the RX.
+    if dest == CRSF.ADDRESS_BROADCAST or dest == CRSF.ADDRESS_TX then
+      queuePush(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(txDevice, replyTo))
+    end
 
     -- RX device responds with delay (relayed over air link)
     -- Uses deferred delivery so it arrives in the next poll cycle,
     -- after the TX DEVICE_INFO has been processed
-    if isRxAvailable() then
-      queuePushDeferred(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(rxDevice, destAddr))
+    if dest == CRSF.ADDRESS_BROADCAST and isRxAvailable() then
+      queuePushDeferred(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(rxDevice, replyTo))
     end
     return true
   elseif command == CRSF.FRAMETYPE_PARAMETER_READ then
@@ -1374,15 +1405,45 @@ local scenarioTelemetry = {
     GSpd = 42.7,
     Alt = 85,
   },
+  -- Bench-realistic signal: a mismatch is caught next to the quad, and the
+  -- active-antenna RSSI must clear the model-match poll's -70 dBm gate.
   model_mismatch = {
     TPWR = 50,
     RFMD = 7,
-    ["1RSS"] = -90,
-    ["2RSS"] = -95,
+    ["1RSS"] = -55,
+    ["2RSS"] = -58,
     RQly = 95,
     ANT = 1,
     RxBt = 15.8,
     Curr = 0.5,
+  },
+  -- Same signal as model_mismatch; RQly is driven by sensorToggle so the link
+  -- drops and returns forever (~10 s up, ~5 s down).
+  mismatch_cycle = {
+    TPWR = 50,
+    RFMD = 7,
+    ["1RSS"] = -55,
+    ["2RSS"] = -58,
+    RQly = 95,
+    ANT = 1,
+    RxBt = 15.8,
+    Curr = 0.5,
+  },
+  -- Marginal link: RQly never 0 and never above 90, active-antenna RSSI never
+  -- above -70 dBm, so every gated poll must stay quiet.
+  weak_link = {
+    TPWR = 250,
+    RFMD = 7,
+    ["1RSS"] = -85,
+    ["2RSS"] = -88,
+    RQly = 60,
+    ANT = 0,
+    RxBt = 15.2,
+    Curr = 12.5,
+    FM = "ACRO",
+    Sats = 9,
+    GSpd = 31.0,
+    Alt = 210,
   },
   reconnect = {
     -- Same as normal; only served when isRxAvailable() is true
@@ -1437,6 +1498,11 @@ local sensorToggle = {
   single_antenna = {
     -- Must stay exactly 0: that is what marks the second RF path as absent.
     ["2RSS"] = { 0 },
+  },
+  mismatch_cycle = {
+    -- ~10 s connected, ~5 s down, repeating. Exactly 95 or 0 so the
+    -- RQly-derived connection state flips cleanly on each phase change.
+    RQly = { 95, 95, 95, 95, 95, 95, 95, 95, 95, 95, 0, 0, 0, 0, 0 },
   },
 }
 local toggleStep = 0

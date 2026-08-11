@@ -671,7 +671,7 @@ local wgt = {
 function wgt.background()
   crsf:poll()
   crsf:requestDeviceInfo()
-  crsf:requestElrsStatus()
+  crsf:updateModelMatch()
   Telemetry.update()
 end
 
