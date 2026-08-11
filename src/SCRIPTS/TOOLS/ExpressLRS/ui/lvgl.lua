@@ -622,14 +622,6 @@ function UI.render(_event, _touchState)
   if not UI.commandDialog then
     handleWarning()
 
-    local currentFolder = Navigation.getCurrent()
-    local folderReady = Protocol.isFolderLoaded(currentFolder)
-    if folderReady and not UI.folderWasReady then
-      if UI.uiBuilt then
-        UI.invalidate()
-      end
-    end
-
     if not UI.uiBuilt and #Protocol.fields > 0 then
       UI.build()
     end
