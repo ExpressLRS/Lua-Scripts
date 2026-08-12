@@ -57,19 +57,6 @@ local Protocol = {
   hadTelemetry = false,
 }
 
--- Telemetry is being received from the RX (decoded ELRS status connected bit)
-function Protocol.hasTelemetry()
-  return Protocol.connected
-end
-
-function Protocol.isModelMismatch()
-  return Protocol.modelMismatch
-end
-
-function Protocol.hasCriticalError()
-  return Protocol.criticalError
-end
-
 -- Response timeout for PARAMETER_READ:
 -- 0.5s for local TX module, 5s for remote devices relayed over air link.
 function Protocol.fieldResponseTimeout()
@@ -448,11 +435,11 @@ end
 
 function Protocol.tick()
   -- Ping on telemetry transition (device may have changed)
-  local hasTelemetry = Protocol.hasTelemetry()
-  if hasTelemetry and not Protocol.hadTelemetry then
+  local connected = Protocol.connected
+  if connected and not Protocol.hadTelemetry then
     crsf:pingDevices()
   end
-  Protocol.hadTelemetry = hasTelemetry
+  Protocol.hadTelemetry = connected
 
   local time = getTime()
   -- Periodic ping for initial device discovery

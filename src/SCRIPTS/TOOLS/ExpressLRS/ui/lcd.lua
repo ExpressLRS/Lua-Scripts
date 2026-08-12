@@ -173,7 +173,7 @@ function UI.render(event, _touchState)
   end
 
   -- Model mismatch alert (full-screen, blocks normal rendering)
-  if Protocol.isModelMismatch() and not UI.warningDismissedAt then
+  if Protocol.modelMismatch and not UI.warningDismissedAt then
     if event == EVT_VIRTUAL_ENTER then
       UI.warningDismissedAt = getTime()
       UI.forceRedraw = true
@@ -449,7 +449,7 @@ function UI.drawTitle()
   local barHeight = 9
   local goodBadPkt = ""
   if Protocol.receivedPackets then
-    local state = Protocol.hasTelemetry() and "C" or "-"
+    local state = Protocol.connected and "C" or "-"
     goodBadPkt = string.format("%u/%u   %s", Protocol.lostPackets, Protocol.receivedPackets, state)
   end
 
