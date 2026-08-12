@@ -154,15 +154,12 @@ Protocol = {
   state = 0, -- STATE_INIT
   statusText = "Initializing...",
 
-  -- crsf_fields.lua session: addressing bytes plus the reassembly keys the
-  -- library manages (fieldChunk doubles as the next chunk index sendRead
-  -- carries, giving multi-chunk entries their follow-up reads).
+  -- CRSF addressing plus the crsf_params.lua reassembly state the codec
+  -- manages (rx.chunk doubles as the next chunk index encodeRead carries,
+  -- giving multi-chunk entries their follow-up reads).
   deviceId = crsf.CONST.ADDRESS_TX,
   handsetId = crsf.CONST.ADDRESS_HANDSET_ELRS,
-  fieldChunk = 0,
-  fieldData = nil,
-  fieldDataId = nil,
-  expectChunksRemain = -1,
+  rx = { chunk = 0, expect = -1 },
 
   -- Discovery
   loadQueue = {},
@@ -225,7 +222,7 @@ function Protocol.armFolderRead(delay)
   Protocol.folderReadAttempts = 0
   -- A fresh read must not inherit chunk state from an interrupted one (e.g.
   -- resume from suspension mid-entry).
-  fields.resetChunks(Protocol)
+  fields.resetChunks(Protocol.rx)
 end
 
 -- ============================================================================
@@ -235,9 +232,9 @@ end
 function Protocol.onSettingsEntry(data)
   -- Passive fan-out mode: accept any field from our device (data[3] as the
   -- expected id) -- sibling widget instances depend on seeing responses they
-  -- did not request. The library gates on Protocol.deviceId and keeps
+  -- did not request. The codec gates on the device address and keeps
   -- cross-field continuations out of an in-flight reassembly buffer.
-  local fieldId, buffer, offset = fields.reassemble(Protocol, data, data[3])
+  local fieldId, buffer, offset = fields.reassemble(Protocol.rx, Protocol.deviceId, data, data[3])
   if not fieldId then
     return
   end
@@ -362,7 +359,7 @@ function Protocol.tick()
   then
     if #Protocol.loadQueue > 0 and now >= Protocol.fieldTimeout then
       local fieldId = Protocol.loadQueue[#Protocol.loadQueue]
-      fields.sendRead(Protocol, fieldId)
+      crsf.push(fields.encodeRead(Protocol.rx, Protocol.deviceId, Protocol.handsetId, fieldId))
       Protocol.fieldTimeout = now + Protocol.fieldResponseTimeout()
     end
   elseif st == Protocol.STATE_READY then
@@ -370,7 +367,7 @@ function Protocol.tick()
       if Protocol.folderReadAttempts < Protocol.FOLDER_READ_RETRIES then
         Protocol.folderReadAttempts = Protocol.folderReadAttempts + 1
         Protocol.folderReadPending = now + Protocol.fieldResponseTimeout()
-        fields.sendRead(Protocol, VTX.ids.folder)
+        crsf.push(fields.encodeRead(Protocol.rx, Protocol.deviceId, Protocol.handsetId, VTX.ids.folder))
       else
         Protocol.folderReadPending = nil
       end
@@ -380,7 +377,7 @@ function Protocol.tick()
       if now - Protocol.lastWriteTime >= 5 then -- 50ms
         local entry = Protocol.writeQueue[Protocol.writeIdx]
         print(table.concat({ "VTXAdmin: writing field=", entry.id, " val=", entry.value }))
-        fields.sendWriteInt(Protocol, entry)
+        crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, entry))
         Protocol.lastWriteTime = now
         Protocol.writeIdx = Protocol.writeIdx + 1
       end

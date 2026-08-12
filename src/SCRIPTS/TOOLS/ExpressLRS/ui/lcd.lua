@@ -522,7 +522,7 @@ function UI.handleEvent(event)
         elseif not field.disabled and ft <= crsf.CONST.FIELD_TEXT_SELECTION then
           UI.edit = not UI.edit
           if not UI.edit then
-            fields.sendWriteInt(Protocol, field)
+            crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
             Protocol.reloadRelatedFields(field)
           end
         end
@@ -609,7 +609,7 @@ function UI.drawPopup(event)
       Protocol.commandCancel()
     end
   elseif Protocol.fieldPopup.status == crsf.CONST.CMD_EXECUTING then
-    if Protocol.fieldChunk == 0 then
+    if Protocol.rx.chunk == 0 then
       UI.commandRunningIndicator = (UI.commandRunningIndicator % 4) + 1
     end
     local result = popupConfirmation(

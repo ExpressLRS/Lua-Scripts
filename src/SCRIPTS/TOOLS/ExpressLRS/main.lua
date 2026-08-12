@@ -16,7 +16,7 @@ local useLvgl = (lvgl ~= nil)
 -- ============================================================================
 
 local crsf = loadScript("/SCRIPTS/ELRS/crsf.lua")()
-local fields = loadScript("/SCRIPTS/ELRS/crsf_fields.lua")(crsf)
+local fields = loadScript("/SCRIPTS/ELRS/crsf_params.lua")(crsf)
 local Protocol = loadScript("/SCRIPTS/TOOLS/ExpressLRS/protocol.lua")(crsf, fields)
 local Navigation = loadScript("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")()
 

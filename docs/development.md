@@ -45,15 +45,15 @@ The tool builds on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 | Module | Purpose |
 |--------|---------|
 | `SCRIPTS/ELRS/crsf.lua` | CRSF constants, telemetry transport (`pop`/`push`), module detection, handler registry, stateless frame decoders (`decodeDeviceInfo`, `decodeElrsStatus`, `isElrsV1Frame`) |
-| `SCRIPTS/ELRS/crsf_fields.lua` | Opt-in parameter-field engine: `PARAMETER_SETTINGS_ENTRY` chunk reassembly and per-type decode, `PARAMETER_READ`/`WRITE` senders, command-step and suppress-critical-errors frames. Stateless -- callers pass a session table. Loaded by the tool and the VTX Admin widget |
+| `SCRIPTS/ELRS/crsf_params.lua` | Opt-in parameter codec: `PARAMETER_SETTINGS_ENTRY` chunk reassembly over a caller-owned rx table and per-type decode, plus encoders that return `PARAMETER_READ`/`WRITE`, command-step and suppress-critical-errors frames for the caller to push. Loaded by the tool and the VTX Admin widget |
 | `SCRIPTS/ELRS/crsf_elrsinfo.lua` | Opt-in TX-module state: DEVICE_INFO cache, version-keyed RFMOD/RFRSSI tables, per-connection model-match latch. Loaded only by the telemetry widget |
 | `SCRIPTS/ELRS/shim.lua` | Polyfills for BW radios missing standard Lua functions |
 
-`crsf_fields.lua` never mutates a frame's data table: `crsf:poll()` hands the same table to every
-registered handler, so an in-place decode would corrupt the frame for sibling handlers -- the hazard
-`crsf.lua`'s `fieldGetString` documents. Its `reassemble()` serves both receive models: the tool
-drains `crsf.pop()` itself and passes the field id it is waiting for, while widgets register a
-handler and pass `data[3]` to accept any field from their device.
+Nothing in `crsf.lua` or `crsf_params.lua` mutates a frame's data table: `crsf:poll()` hands the
+same table to every registered handler, so an in-place decode would corrupt the frame for sibling
+handlers. `reassemble()` serves both receive models: the tool drains `crsf.pop()` itself and passes
+the field id it is waiting for, while widgets register a handler and pass `data[3]` to accept any
+field from their device.
 
 ## CRSF Simulator
 

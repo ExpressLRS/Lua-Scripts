@@ -701,7 +701,7 @@ function UI.createToggleRow(pg, field)
             end,
             set = function(val)
               field.value = val
-              fields.sendWriteInt(Protocol, field)
+              crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
               Protocol.reloadRelatedFields(field)
             end,
             active = function()
@@ -766,7 +766,7 @@ function UI.createChoiceRow(pg, field)
     end,
     set = function(val)
       field.value = val - 1
-      fields.sendWriteInt(Protocol, field)
+      crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
       Protocol.reloadRelatedFields(field)
     end,
     active = function()
@@ -805,7 +805,7 @@ function UI.createNumberRow(pg, field)
     end,
     edited = function(val)
       field.value = val
-      fields.sendWriteInt(Protocol, field)
+      crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
       Protocol.reloadRelatedFields(field)
     end,
     display = function(val)
@@ -901,7 +901,7 @@ function UI.createStringRow(pg, field)
           length = math.min(math.max(field.maxlen or 32, 32), 128),
           set = function(val)
             field.value = val
-            fields.sendWriteString(Protocol, field)
+            crsf.push(fields.encodeWriteString(Protocol.deviceId, Protocol.handsetId, field))
             Protocol.reloadRelatedFields(field)
           end,
           active = function()

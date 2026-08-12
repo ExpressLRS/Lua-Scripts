@@ -19,7 +19,7 @@ When done, your SD card should contain:
 SCRIPTS/
   ELRS/
     crsf.lua                  -- shared CRSF protocol library
-    crsf_fields.lua           -- parameter field codec (tool, VTX Admin)
+    crsf_params.lua           -- parameter codec (tool, VTX Admin)
     crsf_elrsinfo.lua         -- TX module info state (telemetry widget)
     shim.lua                  -- BW compatibility shim
   TOOLS/

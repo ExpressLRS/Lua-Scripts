@@ -42,15 +42,12 @@ local Protocol = {
   linkstatTimeout = 100,
   pingTimeout = 0,
 
-  -- Communication state. fieldChunk/fieldData/fieldDataId/expectChunksRemain
-  -- are the crsf_fields.lua reassembly session keys -- the library manages
-  -- them; fieldChunk stays readable (the BW UI's popup spinner ticks on it).
+  -- Communication state. rx is the crsf_params.lua reassembly state -- the
+  -- codec manages it; rx.chunk stays readable (the BW UI's popup spinner
+  -- ticks on it).
   fieldTimeout = 0,
-  fieldChunk = 0,
-  fieldData = nil,
-  fieldDataId = nil,
+  rx = { chunk = 0, expect = -1 },
   loadQueue = {},
-  expectChunksRemain = -1,
   backgroundLoading = false,
 
   -- Telemetry transition tracking (for auto-discovery on reconnect)
@@ -136,7 +133,7 @@ end
 
 function Protocol.reloadAllFields()
   Protocol.fieldTimeout = 0
-  fields.resetChunks(Protocol)
+  fields.resetChunks(Protocol.rx)
   Protocol.loadQueue = {}
   -- Start by loading only field 0 (root folder).
   -- Its response contains child IDs; only root children are auto-queued.
@@ -170,7 +167,7 @@ end
 
 function Protocol.reloadCurField(field)
   Protocol.fieldTimeout = 0
-  fields.resetChunks(Protocol)
+  fields.resetChunks(Protocol.rx)
   Protocol.loadQueue[#Protocol.loadQueue + 1] = field.id
 end
 
@@ -257,7 +254,7 @@ function Protocol.handleCommandSave(field)
   if field.status ~= nil then
     if field.status < crsf.CONST.CMD_CONFIRMED then
       field.status = crsf.CONST.CMD_CLICK
-      fields.sendCommandStep(Protocol, field.id, crsf.CONST.CMD_CLICK)
+      crsf.push(fields.encodeCommandStep(Protocol.deviceId, Protocol.handsetId, field.id, crsf.CONST.CMD_CLICK))
       Protocol.fieldPopup = field
       Protocol.fieldPopup.lastStatus = crsf.CONST.CMD_IDLE
       Protocol.fieldTimeout = getTime() + field.timeout
@@ -267,7 +264,9 @@ end
 
 function Protocol.commandConfirm()
   if Protocol.fieldPopup then
-    fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_CONFIRMED)
+    crsf.push(
+      fields.encodeCommandStep(Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_CONFIRMED)
+    )
     Protocol.fieldTimeout = getTime() + Protocol.fieldPopup.timeout
     Protocol.fieldPopup.status = crsf.CONST.CMD_CONFIRMED
   end
@@ -276,7 +275,9 @@ end
 -- Cancel and dismiss: sends CMD_CANCEL and drops the popup immediately.
 function Protocol.commandCancel()
   if Protocol.fieldPopup then
-    fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL)
+    crsf.push(
+      fields.encodeCommandStep(Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL)
+    )
     Protocol.fieldPopup = nil
   end
 end
@@ -287,7 +288,9 @@ end
 -- keeps tracking the device's actual command state.
 function Protocol.commandRequestCancel()
   if Protocol.fieldPopup then
-    fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL)
+    crsf.push(
+      fields.encodeCommandStep(Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL)
+    )
     Protocol.fieldTimeout = getTime() + 200
   end
 end
@@ -296,7 +299,7 @@ end
 -- suppress write the module acts on.
 function Protocol.suppressCriticalErrors()
   Protocol.elrsFlags = 0
-  fields.sendSuppressCriticalErrors(Protocol)
+  crsf.push(fields.encodeSuppressCriticalErrors(Protocol.deviceId, Protocol.handsetId))
 end
 
 -- ============================================================================
@@ -324,7 +327,7 @@ end
 -- frames; the library reassembles the chunks before this decodes one field.
 function Protocol.parseParameterInfoMessage(data)
   local expectedId = (Protocol.fieldPopup and Protocol.fieldPopup.id) or Protocol.loadQueue[#Protocol.loadQueue]
-  local fieldId, buffer, offset = fields.reassemble(Protocol, data, expectedId)
+  local fieldId, buffer, offset = fields.reassemble(Protocol.rx, Protocol.deviceId, data, expectedId)
   if not fieldId then
     return
   end
@@ -380,7 +383,7 @@ function Protocol.parseElrsInfoMessage(data)
     return
   end
   if status.id ~= Protocol.deviceId then
-    fields.resetChunks(Protocol)
+    fields.resetChunks(Protocol.rx)
     return
   end
 
@@ -450,7 +453,9 @@ function Protocol.tick()
 
   if Protocol.fieldPopup then
     if time > Protocol.fieldTimeout and Protocol.fieldPopup.status ~= crsf.CONST.CMD_ASKCONFIRM then
-      fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_QUERY)
+      crsf.push(
+        fields.encodeCommandStep(Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_QUERY)
+      )
       Protocol.fieldTimeout = time + Protocol.fieldPopup.timeout
     end
   elseif time > Protocol.linkstatTimeout then
@@ -466,7 +471,9 @@ function Protocol.tick()
     Protocol.linkstatTimeout = time + 100
   elseif time > Protocol.fieldTimeout and Protocol.fieldsCount ~= 0 then
     if #Protocol.loadQueue > 0 then
-      fields.sendRead(Protocol, Protocol.loadQueue[#Protocol.loadQueue])
+      crsf.push(
+        fields.encodeRead(Protocol.rx, Protocol.deviceId, Protocol.handsetId, Protocol.loadQueue[#Protocol.loadQueue])
+      )
       Protocol.fieldTimeout = time + Protocol.fieldResponseTimeout()
     else
       Protocol.backgroundLoading = false

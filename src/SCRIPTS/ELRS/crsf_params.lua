@@ -1,17 +1,19 @@
 ---------------------------------------------------------------------------
--- CRSF Parameter-Field Codec                                            --
+-- CRSF Parameter Codec                                                  --
 --                                                                       --
--- Stateless codecs for CRSF parameter fields: byte getters and the      --
--- per-type PARAMETER_SETTINGS_ENTRY (0x2B) payload decoders. Opt-in:    --
--- only consumers that read or write parameter fields load it, so        --
--- telemetry-only widgets never pay for it. Policy -- load queues,       --
--- command popups, reload decisions -- stays with the caller.            --
+-- Pure codecs for CRSF parameter traffic: byte getters, the per-type    --
+-- PARAMETER_SETTINGS_ENTRY (0x2B) payload decoders, chunk reassembly    --
+-- over a caller-owned rx-state table, and frame encoders that return    --
+-- (frameType, payload) for the caller to push. Opt-in: only consumers   --
+-- that read or write parameter fields load it, so telemetry-only        --
+-- widgets never pay for it. Policy -- load queues, command popups,      --
+-- reload decisions, transport -- stays with the caller.                 --
 --                                                                       --
 -- Purity rule: nothing in this file mutates a frame data table.         --
 -- crsf:poll() hands the same table to every registered handler, so an   --
 -- in-place decode here would corrupt the frame for sibling handlers.    --
 --                                                                       --
--- Loaded via loadScript("/SCRIPTS/ELRS/crsf_fields.lua")(crsf).         --
+-- Loaded via loadScript("/SCRIPTS/ELRS/crsf_params.lua")(crsf).         --
 -- Returns the codec table directly.                                     --
 ---------------------------------------------------------------------------
 
@@ -19,7 +21,7 @@ local crsf = ...
 
 local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
 
-local Fields = {}
+local Params = {}
 
 -- ============================================================================
 -- Byte getters
@@ -30,7 +32,7 @@ local Fields = {}
 -- @param offset  1-based start offset
 -- @param size    width in bytes
 -- @return number
-function Fields.readValue(data, offset, size)
+function Params.readValue(data, offset, size)
   local result = 0
   for i = 0, size - 1 do
     result = bit32.lshift(result, 8) + data[offset + i]
@@ -50,7 +52,7 @@ end
 -- @param isOpts  truthy to split on ';' and return a table of options
 -- @return string|table result, number nextOffset, number optCount (count of
 --         non-empty options; 0 when cached or not isOpts)
-function Fields.readStringOrOpts(data, offset, last, isOpts)
+function Params.readStringOrOpts(data, offset, last, isOpts)
   local r = last or (isOpts and {})
   local optParts = {}
   local vcnt = 0
@@ -87,10 +89,10 @@ end
 -- ============================================================================
 
 local function fieldUnsignedLoad(field, data, offset, size, unitoffset)
-  field.value = Fields.readValue(data, offset, size)
-  field.min = Fields.readValue(data, offset + size, size)
-  field.max = Fields.readValue(data, offset + 2 * size, size)
-  local unit = Fields.readStringOrOpts(data, offset + (unitoffset or (4 * size)), field.unit)
+  field.value = Params.readValue(data, offset, size)
+  field.min = Params.readValue(data, offset + size, size)
+  field.max = Params.readValue(data, offset + 2 * size, size)
+  local unit = Params.readStringOrOpts(data, offset + (unitoffset or (4 * size)), field.unit)
   field.unit = (unit ~= "") and unit or nil
   if size ~= 1 then
     field.size = size
@@ -121,7 +123,7 @@ local function fieldFloatLoad(field, data, offset)
   if field.prec > 3 then
     field.prec = 3
   end
-  field.step = Fields.readValue(data, offset + 17, 4)
+  field.step = Params.readValue(data, offset + 17, 4)
   field.fmt = shim.tableConcat({ "%.", tostring(field.prec), "f" })
   field.prec = 10 ^ field.prec
 end
@@ -130,7 +132,7 @@ local function fieldTextSelLoad(field, data, offset)
   local vcnt
   local oldValues = field.values
   local cached = field.dirty == nil and oldValues
-  field.values, offset, vcnt = Fields.readStringOrOpts(data, offset, cached, true)
+  field.values, offset, vcnt = Params.readStringOrOpts(data, offset, cached, true)
   if not cached then
     field.disabled = (vcnt <= 1) or nil
     -- Preserve table identity if contents unchanged (avoids redundant Choice widget updates)
@@ -148,13 +150,13 @@ local function fieldTextSelLoad(field, data, offset)
     end
   end
   field.value = data[offset]
-  local unit = Fields.readStringOrOpts(data, offset + 4)
+  local unit = Params.readStringOrOpts(data, offset + 4)
   field.unit = (unit ~= "") and unit or nil
   field.dirty = nil
 end
 
 local function fieldStringLoad(field, data, offset)
-  field.value, offset = Fields.readStringOrOpts(data, offset)
+  field.value, offset = Params.readStringOrOpts(data, offset)
   if #data >= offset then
     field.maxlen = data[offset]
   end
@@ -163,7 +165,7 @@ end
 local function fieldCommandLoad(field, data, offset)
   field.status = data[offset]
   field.timeout = data[offset + 1]
-  local info = Fields.readStringOrOpts(data, offset + 2)
+  local info = Params.readStringOrOpts(data, offset + 2)
   field.info = (info ~= "") and info or nil
 end
 
@@ -195,83 +197,83 @@ local handlers = {
 --
 -- PARAMETER_SETTINGS_ENTRY payloads larger than the handset link's frame
 -- limit arrive in chunks (CRSFEndpoint::sendParameter). Reassembly state
--- lives in a caller-owned session table; the library manages these keys:
---   fieldChunk         next chunk index to request (readable; do not write)
---   fieldData          reassembly buffer for the in-flight entry
---   fieldDataId        the field id the buffer belongs to
---   expectChunksRemain duplicate-frame guard
---   fieldDone          field whose multi-chunk entry just completed, to
---                      swallow the other consumers' trailing final chunks
--- Consumers initialize fieldChunk = 0 and expectChunksRemain = -1 alongside
--- their deviceId/handsetId addressing bytes.
+-- lives in a caller-owned rx table with these keys:
+--   chunk   next chunk index to request (readable; do not write)
+--   data    reassembly buffer for the in-flight entry
+--   dataId  the field id the buffer belongs to
+--   expect  duplicate-frame guard (chunks expected to remain)
+--   done    field whose multi-chunk entry just completed, to swallow the
+--           other consumers' trailing final chunks
+-- Consumers initialize rx = { chunk = 0, expect = -1 }.
 -- ============================================================================
 
 --- Abandon any in-flight reassembly.
--- @param session  the session table
-function Fields.resetChunks(session)
-  session.fieldChunk = 0
-  session.fieldData = nil
-  session.fieldDataId = nil
-  session.fieldDone = nil
+-- @param rx  the reassembly-state table
+function Params.resetChunks(rx)
+  rx.chunk = 0
+  rx.data = nil
+  rx.dataId = nil
+  rx.done = nil
 end
 
---- Feed one PARAMETER_SETTINGS_ENTRY frame into the session.
+--- Feed one PARAMETER_SETTINGS_ENTRY frame into the reassembly.
 -- expectedFieldId selects the consumption model: a caller waiting on one
 -- specific field passes its id (nil while idle drops everything), a caller
 -- listening passively under the poll() fan-out passes data[3] to accept any
--- field from session.deviceId -- the fieldDataId gate then keeps a
--- sibling-elicited entry for another field out of an in-flight buffer.
+-- field from deviceId -- the dataId gate then keeps a sibling-elicited entry
+-- for another field out of an in-flight buffer.
 -- Never mutates data, and never retains it: the single-frame fast path
 -- returns data itself as the buffer, valid only for the current call.
--- @param session          the session table
+-- @param rx               the reassembly-state table
+-- @param deviceId         the device address answers must come from
 -- @param data             the frame's byte array
 -- @param expectedFieldId  the field id to accept
 -- @return fieldId, buffer, offset  entry complete; buffer[offset] is the
 --         parent byte, ready for decodeEntry
 -- @return fieldId                  chunk consumed, more expected -- send the
---         next read, which carries the updated session.fieldChunk
+--         next read, which carries the updated rx.chunk
 -- @return nil                      frame dropped (wrong device or field,
 --         cross-field continuation, duplicate chunk)
-function Fields.reassemble(session, data, expectedFieldId)
+function Params.reassemble(rx, deviceId, data, expectedFieldId)
   -- Another device answered, or this is not the awaited field: drop any
   -- partial data
-  if data[2] ~= session.deviceId or data[3] ~= expectedFieldId then
-    Fields.resetChunks(session)
+  if data[2] ~= deviceId or data[3] ~= expectedFieldId then
+    Params.resetChunks(rx)
     return nil
   end
   -- An in-flight buffer only accepts continuation frames for its own field
-  if session.fieldData and session.fieldDataId ~= data[3] then
+  if rx.data and rx.dataId ~= data[3] then
     return nil
   end
   local chunksRemain = data[4]
   -- Trailing duplicates of a multi-chunk entry: when several consumers each
-  -- request the same field, every session sees every answer, and the extra
-  -- copies of the final chunk arrive back to back after this session already
-  -- completed the entry. Their header is indistinguishable from a fresh
-  -- single-frame entry, so they would decode as garbage. Swallow them until
-  -- a new request cycle starts -- traffic for another field, or our own
-  -- sendRead, both of which clear fieldDone.
-  if session.fieldDone then
-    if session.fieldDone == data[3] then
-      if chunksRemain == 0 and not session.fieldData then
+  -- request the same field, every rx sees every answer, and the extra copies
+  -- of the final chunk arrive back to back after this rx already completed
+  -- the entry. Their header is indistinguishable from a fresh single-frame
+  -- entry, so they would decode as garbage. Swallow them until a new request
+  -- cycle starts -- traffic for another field, or our own encodeRead, both
+  -- of which clear done.
+  if rx.done then
+    if rx.done == data[3] then
+      if chunksRemain == 0 and not rx.data then
         return nil
       end
     else
-      session.fieldDone = nil
+      rx.done = nil
     end
   end
   -- chunksRemain changed while data is buffered: duplicate frame, drop it
-  if session.fieldData and chunksRemain ~= session.expectChunksRemain then
+  if rx.data and chunksRemain ~= rx.expect then
     return nil
   end
 
   local buffer
   local offset
   -- If data is chunked, copy it to the persistent buffer
-  if chunksRemain > 0 or session.fieldChunk > 0 then
-    session.fieldData = session.fieldData or {}
-    session.fieldDataId = data[3]
-    buffer = session.fieldData
+  if chunksRemain > 0 or rx.chunk > 0 then
+    rx.data = rx.data or {}
+    rx.dataId = data[3]
+    buffer = rx.data
     for i = 5, #data do
       buffer[#buffer + 1] = data[i]
     end
@@ -283,15 +285,15 @@ function Fields.reassemble(session, data, expectedFieldId)
   end
 
   if chunksRemain > 0 then
-    session.fieldChunk = session.fieldChunk + 1
-    session.expectChunksRemain = chunksRemain - 1
+    rx.chunk = rx.chunk + 1
+    rx.expect = chunksRemain - 1
     return data[3]
   end
 
-  local wasChunked = session.fieldChunk > 0
-  Fields.resetChunks(session)
+  local wasChunked = rx.chunk > 0
+  Params.resetChunks(rx)
   if wasChunked then
-    session.fieldDone = data[3]
+    rx.done = data[3]
   end
   return data[3], buffer, offset
 end
@@ -314,7 +316,7 @@ end
 --                    readStringOrOpts); nil decodes it fresh
 -- @return field, or nil when the entry is shorter than parent + type + one
 --         name byte (the caller should still drop it from its queue)
-function Fields.decodeEntry(field, fieldId, buffer, offset, cachedName)
+function Params.decodeEntry(field, fieldId, buffer, offset, cachedName)
   -- Need at least parent + type + one name byte for the entry to be usable
   if #buffer <= offset + 2 then
     return nil
@@ -323,7 +325,7 @@ function Fields.decodeEntry(field, fieldId, buffer, offset, cachedName)
   field.parent = (buffer[offset] ~= 0) and buffer[offset] or nil
   field.type = bit32.band(buffer[offset + 1], 0x7f)
   field.hidden = bit32.btest(buffer[offset + 1], 0x80) or nil
-  field.name, offset = Fields.readStringOrOpts(buffer, offset + 2, cachedName)
+  field.name, offset = Params.readStringOrOpts(buffer, offset + 2, cachedName)
   local load = handlers[field.type + 1]
   if load then
     load(field, buffer, offset)
@@ -338,30 +340,37 @@ function Fields.decodeEntry(field, fieldId, buffer, offset, cachedName)
 end
 
 -- ============================================================================
--- Frame senders
+-- Frame encoders
 --
--- Every sender takes a caller-owned session table and reads its addressing
--- bytes: session.deviceId (the target device) and session.handsetId (the
--- reply-to address). Wire layouts match the tables in CRSFParameters.h.
+-- Every encoder returns (frameType, payload) for the caller to push --
+-- crsf.push(Params.encodeRead(...)) -- so encoding stays free of transport.
+-- deviceId is the target device, handsetId the reply-to address. Wire
+-- layouts match the tables in CRSFParameters.h.
 -- ============================================================================
 
---- Request one chunk of a field's PARAMETER_SETTINGS_ENTRY. The chunk index
--- rides in session.fieldChunk, so follow-up reads of a chunked entry continue
--- where reassemble() left off (0 requests a fresh entry).
--- @param session  table with deviceId/handsetId and fieldChunk
--- @param fieldId  the field id to read
-function Fields.sendRead(session, fieldId)
-  session.fieldDone = nil
-  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_READ, { session.deviceId, session.handsetId, fieldId, session.fieldChunk })
+--- Encode a request for one chunk of a field's PARAMETER_SETTINGS_ENTRY.
+-- Starts a new request cycle on rx: clears rx.done, and carries rx.chunk so
+-- follow-up reads of a chunked entry continue where reassemble() left off
+-- (0 requests a fresh entry).
+-- @param rx         the reassembly-state table
+-- @param deviceId   the target device address
+-- @param handsetId  the reply-to address
+-- @param fieldId    the field id to read
+-- @return frameType, payload
+function Params.encodeRead(rx, deviceId, handsetId, fieldId)
+  rx.done = nil
+  return crsf.CONST.FRAMETYPE_PARAMETER_READ, { deviceId, handsetId, fieldId, rx.chunk }
 end
 
---- Send a PARAMETER_WRITE carrying a field's integer value, big-endian at the
--- field's width. field.size < 0 marks a signed field |size| bytes wide
+--- Encode a PARAMETER_WRITE carrying a field's integer value, big-endian at
+-- the field's width. field.size < 0 marks a signed field |size| bytes wide
 -- (decodeEntry's convention); negative values are re-encoded as two's
 -- complement. A missing size means 1 byte.
--- @param session  table with deviceId/handsetId
--- @param field    table with id, value and optional size
-function Fields.sendWriteInt(session, field)
+-- @param deviceId   the target device address
+-- @param handsetId  the reply-to address
+-- @param field      table with id, value and optional size
+-- @return frameType, payload
+function Params.encodeWriteInt(deviceId, handsetId, field)
   local value = field.value
   local size = field.size or 1
   if size < 0 then
@@ -371,19 +380,21 @@ function Fields.sendWriteInt(session, field)
     end
   end
 
-  local frame = { session.deviceId, session.handsetId, field.id }
+  local frame = { deviceId, handsetId, field.id }
   for i = size - 1, 0, -1 do
     frame[#frame + 1] = bit32.rshift(value, 8 * i) % 256
   end
-  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame)
+  return crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame
 end
 
---- Send a PARAMETER_WRITE carrying a field's string value, clamped to
+--- Encode a PARAMETER_WRITE carrying a field's string value, clamped to
 -- field.maxlen (default 32), inner NULs stripped, null-terminated.
--- @param session  table with deviceId/handsetId
--- @param field    table with id, value and optional maxlen
-function Fields.sendWriteString(session, field)
-  local frame = { session.deviceId, session.handsetId, field.id }
+-- @param deviceId   the target device address
+-- @param handsetId  the reply-to address
+-- @param field      table with id, value and optional maxlen
+-- @return frameType, payload
+function Params.encodeWriteString(deviceId, handsetId, field)
+  local frame = { deviceId, handsetId, field.id }
   local val = field.value or ""
   local maxlen = field.maxlen or 32
   if #val > maxlen then
@@ -396,34 +407,36 @@ function Fields.sendWriteString(session, field)
     end
   end
   frame[#frame + 1] = 0
-  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame)
+  return crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame
 end
 
---- Send a command-step PARAMETER_WRITE: one byte from the commandStep_e
+--- Encode a command-step PARAMETER_WRITE: one byte from the commandStep_e
 -- machine (crsf.CONST.CMD_CLICK / CMD_CONFIRMED / CMD_CANCEL / CMD_QUERY).
--- @param session  table with deviceId/handsetId
--- @param fieldId  the command field's id
--- @param step     the command step byte
-function Fields.sendCommandStep(session, fieldId, step)
-  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { session.deviceId, session.handsetId, fieldId, step })
+-- @param deviceId   the target device address
+-- @param handsetId  the reply-to address
+-- @param fieldId    the command field's id
+-- @param step       the command step byte
+-- @return frameType, payload
+function Params.encodeCommandStep(deviceId, handsetId, fieldId, step)
+  return crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { deviceId, handsetId, fieldId, step }
 end
 
 -- Pseudo-field id: a PARAMETER_WRITE to this id calls supressCriticalErrors()
 -- in TXModuleEndpoint.cpp (the firmware matches the bare 0x2E literal).
 local FIELD_ID_SUPPRESS_CRITICAL_ERRORS = 0x2E
 
---- Ask the module to stop reporting its critical error flags (the bits above
--- crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD in the ELRS status byte).
--- @param session  table with deviceId/handsetId
-function Fields.sendSuppressCriticalErrors(session)
-  crsf.push(
-    crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
-    { session.deviceId, session.handsetId, FIELD_ID_SUPPRESS_CRITICAL_ERRORS, 0 }
-  )
+--- Encode the write that asks the module to stop reporting its critical
+-- error flags (the bits above crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD in
+-- the ELRS status byte).
+-- @param deviceId   the target device address
+-- @param handsetId  the reply-to address
+-- @return frameType, payload
+function Params.encodeSuppressCriticalErrors(deviceId, handsetId)
+  return crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { deviceId, handsetId, FIELD_ID_SUPPRESS_CRITICAL_ERRORS, 0 }
 end
 
 -- ============================================================================
 -- Return codec table
 -- ============================================================================
 
-return Fields
+return Params
