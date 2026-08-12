@@ -887,8 +887,14 @@ end
 --- Update the dynName field on TX Power and VTX Administrator folders
 -- so the simulator matches real firmware behavior where folder names show
 -- a summary of the current settings in parentheses.
+-- Only the TX module builds these summaries; receiver parameters reuse the
+-- same ids for unrelated settings, so the ids below are meaningless there.
 -- @param device  the device table whose params to update
 local function updateFolderNames(device)
+  if device.id ~= CRSF.ADDRESS_TX then
+    return
+  end
+
   -- TX Power folder (id=6): children Max Power (id=7), Dynamic (id=8)
   local txPwrFolder = findParam(device, 6)
   local maxPower = findParam(device, 7)
@@ -1330,6 +1336,15 @@ local function mockPush(command, data)
             param.value = v
           else
             param.value = writeValue
+          end
+          -- Dynamic power off hides Fan Thresh: mimic firmware visibility
+          -- rules driven by sibling values, so a write can flip a field's
+          -- hidden bit and the Lua script sees it on the sibling re-read.
+          if device.id == CRSF.ADDRESS_TX and param.id == 8 then
+            local fanThresh = findParam(device, 9)
+            if fanThresh then
+              fanThresh.hidden = (param.value == 0) or nil
+            end
           end
           -- Output Mapping per-channel config: mimic firmware behavior
           -- where changing Output Ch loads sibling values from per-channel config,

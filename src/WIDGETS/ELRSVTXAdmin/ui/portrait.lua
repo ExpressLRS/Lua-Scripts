@@ -4,7 +4,7 @@
 ---------------------------------------------------------------------------
 
 local ctx = ...
-local VTX = ctx.VTX
+local VTXAdmin = ctx.VTXAdmin
 local bgOpacity = ctx.bgOpacity
 local VTXDisplay = ctx.VTXDisplay
 local WidgetLayout = ctx.WidgetLayout
@@ -36,22 +36,22 @@ WidgetUI.fonts = {
 
 --- Shorter detail line for narrow portrait screen.
 local function detailLine()
-  if not VTX.hasPower() then
+  if not VTXAdmin.hasPower() then
     return ""
   end
-  local pit = VTX.state.pitmode and " Pit" or ""
+  local pit = VTXAdmin.state.pitmode and " Pit" or ""
   return table.concat({ VTXDisplay.powerShort(), pit })
 end
 
 --- Shorter long-form detail line for narrow portrait screen.
 local function detailLong()
-  if VTX.isDisabled() then
+  if VTXAdmin.isDisabled() then
     return "VTX Disabled"
   end
-  if not VTX.hasPower() then
+  if not VTXAdmin.hasPower() then
     return ""
   end
-  local pit = VTX.state.pitmode and "  Pit" or ""
+  local pit = VTXAdmin.state.pitmode and "  Pit" or ""
   return table.concat({ VTXDisplay.powerLong(), pit })
 end
 
