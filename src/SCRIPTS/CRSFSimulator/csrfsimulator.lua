@@ -45,8 +45,18 @@ local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
 --                    in minimized widgets, full-screen subtitle updates).
 --   "no_module"      No CRSF module found at all. Triggers the "No Module
 --                    Found" error dialog immediately.
+--   "critical_error" TX + RX connected but the module reports a critical
+--                    error (baud rate too low). Exercises the warning screen
+--                    and the suppress-critical-errors write (field id 0x2E),
+--                    which clears the flags until the script restarts.
 local config = {
   scenario = "normal",
+  -- Largest frame the handset link carries (CRSF_MAX_PACKET_LEN on a fast
+  -- link). PARAMETER_SETTINGS_ENTRY payloads larger than maxPacketBytes - 8
+  -- are chunked exactly as CRSFEndpoint::sendParameter does. Real firmware
+  -- shrinks this on slow baud rates (CRSFHandset::adjustMaxPacketSize, floor
+  -- 15) -- lower it here to emulate a slow link and force deeper chunking.
+  maxPacketBytes = 64,
 }
 
 -- ============================================================================
@@ -92,6 +102,10 @@ local CRSF = {
   CMD_CONFIRMED = 4,
   CMD_CANCEL = 5,
   CMD_QUERY = 6,
+
+  -- Pseudo-field id: a PARAMETER_WRITE to this id calls supressCriticalErrors()
+  -- in TXModuleEndpoint.cpp (the firmware uses the bare 0x2E literal).
+  FIELD_ID_SUPPRESS_CRITICAL_ERRORS = 0x2E,
 }
 
 -- ============================================================================
@@ -238,13 +252,17 @@ local function encodeDeviceInfo(device, destAddr)
 end
 
 --- Encode a PARAMETER_SETTINGS_ENTRY packet (frame type 0x2B)
--- Encodes one chunk of a parameter. Currently only single-chunk (chunk 0) supported.
+-- Encodes one chunk of a parameter, chunking at the handset link's frame
+-- limit exactly as CRSFEndpoint::sendParameter does: payloads larger than
+-- config.maxPacketBytes - 8 are sliced, each frame repeating the
+-- [dest, src, fieldId, chunksRemain] header with the countdown in
+-- chunksRemain.
 -- @param device  the device table (for id)
 -- @param param   the parameter definition table
--- @param chunk   chunk index (0 for single-chunk params)
+-- @param chunk   requested chunk index (0-based)
 -- @param destAddr  destination address
 -- @return data table suitable for queuePush(FRAMETYPE_PARAMETER_SETTINGS_ENTRY, data)
-local function encodeParameterEntry(device, param, _chunk, destAddr)
+local function encodeParameterEntry(device, param, chunk, destAddr)
   local data = {}
   data[1] = destAddr or CRSF.ADDRESS_HANDSET
   data[2] = device.id
@@ -352,7 +370,27 @@ local function encodeParameterEntry(device, param, _chunk, destAddr)
     appendString(data, param.units or "")
   end
 
-  return data
+  -- Chunking per CRSFEndpoint::sendParameter: the payload from the parent
+  -- byte onward is sliced into (maxPacketBytes - 8)-byte chunks -- 6 bytes of
+  -- CRSF header/CRC plus the FieldId + ChunksRemain pair repeated per frame.
+  local chunkMax = config.maxPacketBytes - 8
+  local body = {}
+  for i = 5, #data do
+    body[#body + 1] = data[i]
+  end
+  if #body <= chunkMax then
+    return data
+  end
+  local totalChunks = math.ceil(#body / chunkMax)
+  local k = chunk or 0
+  if k >= totalChunks then
+    k = totalChunks - 1
+  end
+  local out = { data[1], data[2], data[3], totalChunks - 1 - k }
+  for i = k * chunkMax + 1, math.min((k + 1) * chunkMax, #body) do
+    out[#out + 1] = body[i]
+  end
+  return out
 end
 
 --- Encode an ELRS_STATUS packet (frame type 0x2E)
@@ -398,7 +436,7 @@ local txDevice = {
   serialNo = CRSF.ELRS_SERIAL_ID,
   hwVer = 0,
   swVer = 0x00030500, -- 3.5.0
-  fieldCount = 24, -- total parameter count
+  fieldCount = 25, -- total parameter count
   params = {
     {
       id = 1,
@@ -589,6 +627,20 @@ local txDevice = {
 
     -- Version + regulatory domain (name = version+domain, value = commit hash)
     { id = 23, parent = 0, type = CRSF.INFO, name = "3.5.0 ISM2G4", value = "825ed8" },
+
+    -- Signed integer field (INT8): exercises sign extension on load and the
+    -- two's-complement re-encode on save. Not a real TX parameter.
+    {
+      id = 25,
+      parent = 0,
+      type = CRSF.INT8,
+      name = "RF Gain",
+      value = -3,
+      min = -10,
+      max = 10,
+      default = 0,
+      units = "dB",
+    },
   },
 }
 
@@ -1012,6 +1064,11 @@ end
 --   bit 4: LUA_FLAG_WARNING1
 --   bit 5: LUA_FLAG_ERROR_CONNECTED (critical)
 --   bit 6: LUA_FLAG_ERROR_BAUDRATE (critical)
+
+-- Set by a PARAMETER_WRITE to pseudo-field 0x2E (TXModuleEndpoint.cpp
+-- supressCriticalErrors): critical flag bits stay cleared afterwards.
+local criticalErrorsSuppressed = false
+
 local function getElrsFlags()
   if config.scenario == "reconnect" then
     return isRxAvailable() and 0x01 or 0x00
@@ -1019,6 +1076,11 @@ local function getElrsFlags()
     return 0x05 -- connected + model mismatch
   elseif config.scenario == "armed" then
     return 0x09 -- connected + armed
+  elseif config.scenario == "critical_error" then
+    if criticalErrorsSuppressed then
+      return 0x01 -- connected, critical bits suppressed
+    end
+    return 0x41 -- connected + baud rate error (critical)
   elseif
     config.scenario == "normal"
     or config.scenario == "slow_loading"
@@ -1036,6 +1098,8 @@ local function getElrsFlagsInfo()
     return "Model Mismatch"
   elseif config.scenario == "armed" then
     return "[ ! Armed ! ]"
+  elseif config.scenario == "critical_error" and not criticalErrorsSuppressed then
+    return "Baud rate too low"
   end
   return ""
 end
@@ -1208,6 +1272,12 @@ local function mockPush(command, data)
       return true
     end
 
+    -- Special case: suppress-critical-errors write (TXModuleEndpoint.cpp).
+    if fieldId == CRSF.FIELD_ID_SUPPRESS_CRITICAL_ERRORS then
+      criticalErrorsSuppressed = true
+      return true
+    end
+
     local device = findDeviceByAddr(deviceId)
     if device then
       local param = findParam(device, fieldId)
@@ -1250,6 +1320,12 @@ local function mockPush(command, data)
             local v = bit32.lshift(data[4] or 0, 8) + (data[5] or 0)
             if t == CRSF.INT16 and v >= 0x8000 then
               v = v - 0x10000
+            end
+            param.value = v
+          elseif t == CRSF.INT8 then
+            local v = writeValue or 0
+            if v >= 0x80 then
+              v = v - 0x100
             end
             param.value = v
           else
@@ -1458,6 +1534,21 @@ local scenarioTelemetry = {
   },
   slow_loading = {
     -- Same as normal; fields load slowly but telemetry is available
+    TPWR = 50,
+    RFMD = 7,
+    ["1RSS"] = -87,
+    ["2RSS"] = -93,
+    RQly = 99,
+    ANT = 1,
+    RxBt = 15.2,
+    Curr = 12.5,
+    FM = "ACRO",
+    Sats = 12,
+    GSpd = 25.3,
+    Alt = 142,
+  },
+  critical_error = {
+    -- Same link as normal; only the ELRS status flags differ.
     TPWR = 50,
     RFMD = 7,
     ["1RSS"] = -87,
