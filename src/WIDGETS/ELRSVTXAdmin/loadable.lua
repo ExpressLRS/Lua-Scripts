@@ -9,7 +9,7 @@
 -- UI is loaded from a screen-specific file in ui/ based on LCD_W/LCD_H. --
 ---------------------------------------------------------------------------
 
-local zone, options, crsf = ...
+local zone, options, crsf, fields = ...
 
 -- Forward declarations for modules (needed for cross-references)
 local VTX
@@ -93,8 +93,18 @@ function VTX.parseFolderName(name)
     s.pitmode = true
     s.pitmodeAux = nil
   else
+    -- Strip the trailing up/down arrow: the shared decoder translates the
+    -- firmware's one-byte arrows into the (multi-byte) CHAR_UP/CHAR_DOWN
+    -- glyphs before the name reaches us.
     s.pitmode = false
-    s.pitmodeAux = string.sub(parts[4], 1, -2)
+    local part = parts[4]
+    if CHAR_UP and string.sub(part, -#CHAR_UP) == CHAR_UP then
+      s.pitmodeAux = string.sub(part, 1, -#CHAR_UP - 1)
+    elseif CHAR_DOWN and string.sub(part, -#CHAR_DOWN) == CHAR_DOWN then
+      s.pitmodeAux = string.sub(part, 1, -#CHAR_DOWN - 1)
+    else
+      s.pitmodeAux = string.sub(part, 1, -2)
+    end
   end
   return true
 end
@@ -143,6 +153,16 @@ Protocol = {
   -- Current state
   state = 0, -- STATE_INIT
   statusText = "Initializing...",
+
+  -- crsf_fields.lua session: addressing bytes plus the reassembly keys the
+  -- library manages (fieldChunk doubles as the next chunk index sendRead
+  -- carries, giving multi-chunk entries their follow-up reads).
+  deviceId = crsf.CONST.ADDRESS_TX,
+  handsetId = crsf.CONST.ADDRESS_HANDSET_ELRS,
+  fieldChunk = 0,
+  fieldData = nil,
+  fieldDataId = nil,
+  expectChunksRemain = -1,
 
   -- Discovery
   loadQueue = {},
@@ -203,59 +223,9 @@ end
 function Protocol.armFolderRead(delay)
   Protocol.folderReadPending = getTime() + delay
   Protocol.folderReadAttempts = 0
-end
-
--- ============================================================================
--- Protocol: Parse helpers
--- ============================================================================
-
---- Parse child IDs from a FOLDER-type PARAMETER_SETTINGS_ENTRY payload.
-function Protocol.parseChildIds(data)
-  local ids = {}
-  local off = 7
-  while data[off] ~= nil and data[off] ~= 0 do
-    off = off + 1
-  end
-  off = off + 1 -- skip null terminator
-  while data[off] ~= nil and data[off] ~= crsf.CONST.FIELD_LIST_END do
-    ids[#ids + 1] = data[off]
-    off = off + 1
-  end
-  return ids
-end
-
---- Parse field name from a PARAMETER_SETTINGS_ENTRY payload.
-function Protocol.parseFieldName(data)
-  local off = 7
-  local startOff = off
-  while data[off] ~= nil and data[off] ~= 0 do
-    off = off + 1
-  end
-  local chars = {}
-  for i = startOff, off - 1 do
-    chars[#chars + 1] = string.char(data[i])
-  end
-  return table.concat(chars)
-end
-
---- Parse field type from a PARAMETER_SETTINGS_ENTRY payload.
-function Protocol.parseFieldType(data)
-  return bit32.band(data[6] or 0, 0x7F)
-end
-
--- ============================================================================
--- Protocol: Sending
--- ============================================================================
-
-function Protocol.sendParameterRead(fieldId)
-  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_READ, { crsf.CONST.ADDRESS_TX, crsf.CONST.ADDRESS_HANDSET_ELRS, fieldId, 0 })
-end
-
-function Protocol.sendParameterWrite(fieldId, value)
-  crsf.push(
-    crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
-    { crsf.CONST.ADDRESS_TX, crsf.CONST.ADDRESS_HANDSET_ELRS, fieldId, value }
-  )
+  -- A fresh read must not inherit chunk state from an interrupted one (e.g.
+  -- resume from suspension mid-entry).
+  fields.resetChunks(Protocol)
 end
 
 -- ============================================================================
@@ -263,15 +233,36 @@ end
 -- ============================================================================
 
 function Protocol.onSettingsEntry(data)
-  if data[2] ~= crsf.CONST.ADDRESS_TX then
+  -- Passive fan-out mode: accept any field from our device (data[3] as the
+  -- expected id) -- sibling widget instances depend on seeing responses they
+  -- did not request. The library gates on Protocol.deviceId and keeps
+  -- cross-field continuations out of an in-flight reassembly buffer.
+  local fieldId, buffer, offset = fields.reassemble(Protocol, data, data[3])
+  if not fieldId then
+    return
+  end
+  if not buffer then
+    -- Chunk consumed: hurry the follow-up read, which carries the updated
+    -- chunk index. The device is answering, so no retry attempt is burned.
+    if Protocol.state >= Protocol.STATE_DISCOVER_ROOT and Protocol.state <= Protocol.STATE_DISCOVER_VTX then
+      Protocol.fieldTimeout = 0
+    elseif Protocol.folderReadPending then
+      Protocol.folderReadPending = getTime()
+      Protocol.folderReadAttempts = 0
+    end
     return
   end
 
-  local fieldId = data[3]
-  local fieldType = Protocol.parseFieldType(data)
-  local fieldName = Protocol.parseFieldName(data)
-
-  Protocol.discoveredFields[fieldId] = { name = fieldName, type = fieldType }
+  local field = Protocol.discoveredFields[fieldId]
+  if not field then
+    field = {}
+    Protocol.discoveredFields[fieldId] = field
+  end
+  if not fields.decodeEntry(field, fieldId, buffer, offset) then
+    return
+  end
+  local fieldType = field.type
+  local fieldName = field.name
 
   -- Pop the field from load queue if it matches
   if #Protocol.loadQueue > 0 and Protocol.loadQueue[#Protocol.loadQueue] == fieldId then
@@ -283,7 +274,7 @@ function Protocol.onSettingsEntry(data)
 
   if st == Protocol.STATE_DISCOVER_ROOT then
     if fieldId == 0 and fieldType == crsf.CONST.FIELD_FOLDER then
-      Protocol.rootChildren = Protocol.parseChildIds(data)
+      Protocol.rootChildren = field.children or {}
       for i = #Protocol.rootChildren, 1, -1 do
         Protocol.loadQueue[#Protocol.loadQueue + 1] = Protocol.rootChildren[i]
       end
@@ -293,7 +284,7 @@ function Protocol.onSettingsEntry(data)
   elseif st == Protocol.STATE_DISCOVER_CHILDREN then
     if fieldType == crsf.CONST.FIELD_FOLDER and string.sub(fieldName, 1, 9) == "VTX Admin" then
       VTX.ids.folder = fieldId
-      Protocol.vtxChildren = Protocol.parseChildIds(data)
+      Protocol.vtxChildren = field.children or {}
       VTX.parseFolderName(fieldName)
       for i = #Protocol.vtxChildren, 1, -1 do
         Protocol.loadQueue[#Protocol.loadQueue + 1] = Protocol.vtxChildren[i]
@@ -371,7 +362,7 @@ function Protocol.tick()
   then
     if #Protocol.loadQueue > 0 and now >= Protocol.fieldTimeout then
       local fieldId = Protocol.loadQueue[#Protocol.loadQueue]
-      Protocol.sendParameterRead(fieldId)
+      fields.sendRead(Protocol, fieldId)
       Protocol.fieldTimeout = now + Protocol.fieldResponseTimeout()
     end
   elseif st == Protocol.STATE_READY then
@@ -379,7 +370,7 @@ function Protocol.tick()
       if Protocol.folderReadAttempts < Protocol.FOLDER_READ_RETRIES then
         Protocol.folderReadAttempts = Protocol.folderReadAttempts + 1
         Protocol.folderReadPending = now + Protocol.fieldResponseTimeout()
-        Protocol.sendParameterRead(VTX.ids.folder)
+        fields.sendRead(Protocol, VTX.ids.folder)
       else
         Protocol.folderReadPending = nil
       end
@@ -388,8 +379,8 @@ function Protocol.tick()
     if Protocol.writeIdx <= #Protocol.writeQueue then
       if now - Protocol.lastWriteTime >= 5 then -- 50ms
         local entry = Protocol.writeQueue[Protocol.writeIdx]
-        print(table.concat({ "VTXAdmin: writing field=", entry[1], " val=", entry[2] }))
-        Protocol.sendParameterWrite(entry[1], entry[2])
+        print(table.concat({ "VTXAdmin: writing field=", entry.id, " val=", entry.value }))
+        fields.sendWriteInt(Protocol, entry)
         Protocol.lastWriteTime = now
         Protocol.writeIdx = Protocol.writeIdx + 1
       end
@@ -443,19 +434,19 @@ function Protocol.writeConfig()
   }))
 
   if d.band ~= s.band then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { VTX.ids.band, d.band }
+    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.band, value = d.band }
   end
   if d.channel ~= s.channel then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { VTX.ids.channel, d.channel }
+    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.channel, value = d.channel }
   end
   if d.power ~= s.power then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { VTX.ids.power, d.power }
+    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.power, value = d.power }
   end
 
   local desiredPit = d.pitmode
   local currentPit = s.pitmode and 1 or 0
   if desiredPit ~= currentPit then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { VTX.ids.pitmode, desiredPit }
+    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.pitmode, value = desiredPit }
   end
 
   print(table.concat({ "VTXAdmin: write queue built, ", #Protocol.writeQueue, " field(s)" }))
@@ -475,7 +466,7 @@ function Protocol.pushToVtx()
   end
 
   print("VTXAdmin: pushToVtx() - queuing Send VTx command")
-  Protocol.writeQueue[#Protocol.writeQueue + 1] = { VTX.ids.send, crsf.CONST.CMD_CLICK }
+  Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.send, value = crsf.CONST.CMD_CLICK }
 
   if Protocol.state ~= Protocol.STATE_SENDING then
     Protocol.writeIdx = 1

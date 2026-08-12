@@ -201,6 +201,8 @@ local handlers = {
 --   fieldData          reassembly buffer for the in-flight entry
 --   fieldDataId        the field id the buffer belongs to
 --   expectChunksRemain duplicate-frame guard
+--   fieldDone          field whose multi-chunk entry just completed, to
+--                      swallow the other consumers' trailing final chunks
 -- Consumers initialize fieldChunk = 0 and expectChunksRemain = -1 alongside
 -- their deviceId/handsetId addressing bytes.
 -- ============================================================================
@@ -211,6 +213,7 @@ function Fields.resetChunks(session)
   session.fieldChunk = 0
   session.fieldData = nil
   session.fieldDataId = nil
+  session.fieldDone = nil
 end
 
 --- Feed one PARAMETER_SETTINGS_ENTRY frame into the session.
@@ -242,6 +245,22 @@ function Fields.reassemble(session, data, expectedFieldId)
     return nil
   end
   local chunksRemain = data[4]
+  -- Trailing duplicates of a multi-chunk entry: when several consumers each
+  -- request the same field, every session sees every answer, and the extra
+  -- copies of the final chunk arrive back to back after this session already
+  -- completed the entry. Their header is indistinguishable from a fresh
+  -- single-frame entry, so they would decode as garbage. Swallow them until
+  -- a new request cycle starts -- traffic for another field, or our own
+  -- sendRead, both of which clear fieldDone.
+  if session.fieldDone then
+    if session.fieldDone == data[3] then
+      if chunksRemain == 0 and not session.fieldData then
+        return nil
+      end
+    else
+      session.fieldDone = nil
+    end
+  end
   -- chunksRemain changed while data is buffered: duplicate frame, drop it
   if session.fieldData and chunksRemain ~= session.expectChunksRemain then
     return nil
@@ -270,7 +289,11 @@ function Fields.reassemble(session, data, expectedFieldId)
     return data[3]
   end
 
+  local wasChunked = session.fieldChunk > 0
   Fields.resetChunks(session)
+  if wasChunked then
+    session.fieldDone = data[3]
+  end
   return data[3], buffer, offset
 end
 
@@ -329,6 +352,7 @@ end
 -- @param session  table with deviceId/handsetId and fieldChunk
 -- @param fieldId  the field id to read
 function Fields.sendRead(session, fieldId)
+  session.fieldDone = nil
   crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_READ, { session.deviceId, session.handsetId, fieldId, session.fieldChunk })
 end
 
