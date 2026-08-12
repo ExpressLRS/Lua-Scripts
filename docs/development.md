@@ -35,7 +35,7 @@ Run `make help` to list all targets. The Makefile groups them into three categor
 | Module | Purpose |
 |--------|---------|
 | `main.lua` | Entry point and run-loop orchestrator |
-| `protocol.lua` | CRSF frame parsing, device discovery, parameter read/write |
+| `protocol.lua` | Device discovery, load-queue and command-popup policy over the shared field engine |
 | `navigation.lua` | Folder and device navigation stack |
 | `ui/lvgl.lua` | Color LCD interface (LVGL dialogs, command pages, warnings) |
 | `ui/lcd.lua` | BW LCD interface (text cursor, popups) |
@@ -45,8 +45,15 @@ The tool builds on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 | Module | Purpose |
 |--------|---------|
 | `SCRIPTS/ELRS/crsf.lua` | CRSF constants, telemetry transport (`pop`/`push`), module detection, handler registry, stateless frame decoders (`decodeDeviceInfo`, `decodeElrsStatus`, `isElrsV1Frame`) |
-| `SCRIPTS/ELRS/elrsinfo.lua` | Opt-in TX-module state: DEVICE_INFO cache, version-keyed RFMOD/RFRSSI tables, per-connection model-match latch. Loaded only by the telemetry widget |
+| `SCRIPTS/ELRS/crsf_fields.lua` | Opt-in parameter-field engine: `PARAMETER_SETTINGS_ENTRY` chunk reassembly and per-type decode, `PARAMETER_READ`/`WRITE` senders, command-step and suppress-critical-errors frames. Stateless -- callers pass a session table. Loaded by the tool and the VTX Admin widget |
+| `SCRIPTS/ELRS/crsf_elrsinfo.lua` | Opt-in TX-module state: DEVICE_INFO cache, version-keyed RFMOD/RFRSSI tables, per-connection model-match latch. Loaded only by the telemetry widget |
 | `SCRIPTS/ELRS/shim.lua` | Polyfills for BW radios missing standard Lua functions |
+
+`crsf_fields.lua` never mutates a frame's data table: `crsf:poll()` hands the same table to every
+registered handler, so an in-place decode would corrupt the frame for sibling handlers -- the hazard
+`crsf.lua`'s `fieldGetString` documents. Its `reassemble()` serves both receive models: the tool
+drains `crsf.pop()` itself and passes the field id it is waiting for, while widgets register a
+handler and pass `data[3]` to accept any field from their device.
 
 ## CRSF Simulator
 
@@ -76,3 +83,9 @@ The simulator supports multiple test scenarios, configurable via the `config.sce
 | `single_antenna` | TX + RX connected on a receiver with one RF path. `2RSS` is pinned to 0, so the telemetry widget reports no diversity. |
 | `slow_loading` | Parameter reads delayed by ~2 seconds each. Tests loading UI states. |
 | `no_module` | No CRSF module found. Triggers "No Module Found" error dialog. |
+| `critical_error` | TX + RX connected with a critical baud-rate error flag. Triggers the warning screen; the suppress write clears it. |
+
+`config.maxPacketBytes` (default 64, `CRSF_MAX_PACKET_LEN`) is the largest frame the mock handset
+link carries. Parameter entries longer than `maxPacketBytes - 8` are chunked exactly as
+`CRSFEndpoint::sendParameter` does, so lowering it -- real firmware shrinks it on slow baud rates in
+`CRSFHandset::adjustMaxPacketSize` -- exercises chunk reassembly and the follow-up reads.
