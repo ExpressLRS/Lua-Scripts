@@ -42,10 +42,13 @@ local Protocol = {
   linkstatTimeout = 100,
   pingTimeout = 0,
 
-  -- Communication state
+  -- Communication state. fieldChunk/fieldData/fieldDataId/expectChunksRemain
+  -- are the crsf_fields.lua reassembly session keys -- the library manages
+  -- them; fieldChunk stays readable (the BW UI's popup spinner ticks on it).
   fieldTimeout = 0,
   fieldChunk = 0,
   fieldData = nil,
+  fieldDataId = nil,
   loadQueue = {},
   expectChunksRemain = -1,
   backgroundLoading = false,
@@ -146,8 +149,7 @@ end
 
 function Protocol.reloadAllFields()
   Protocol.fieldTimeout = 0
-  Protocol.fieldChunk = 0
-  Protocol.fieldData = nil
+  fields.resetChunks(Protocol)
   Protocol.loadQueue = {}
   -- Start by loading only field 0 (root folder).
   -- Its response contains child IDs; only root children are auto-queued.
@@ -181,8 +183,7 @@ end
 
 function Protocol.reloadCurField(field)
   Protocol.fieldTimeout = 0
-  Protocol.fieldChunk = 0
-  Protocol.fieldData = nil
+  fields.resetChunks(Protocol)
   Protocol.loadQueue[#Protocol.loadQueue + 1] = field.id
 end
 
@@ -332,79 +333,57 @@ function Protocol.parseDeviceInfoMessage(data)
   return device, isNew
 end
 
--- Handle a parameter settings entry (0x2B) frame. Field data can span several frames,
--- so this reassembles the chunks before decoding one field.
+-- Handle a parameter settings entry (0x2B) frame. Field data can span several
+-- frames; the library reassembles the chunks before this decodes one field.
 function Protocol.parseParameterInfoMessage(data)
-  local fieldId = (Protocol.fieldPopup and Protocol.fieldPopup.id) or Protocol.loadQueue[#Protocol.loadQueue]
-  -- Another device answered, or this is not the field we are waiting for: drop any partial data
-  if data[2] ~= Protocol.deviceId or data[3] ~= fieldId then
-    Protocol.fieldData = nil
-    Protocol.fieldChunk = 0
+  local expectedId = (Protocol.fieldPopup and Protocol.fieldPopup.id) or Protocol.loadQueue[#Protocol.loadQueue]
+  local fieldId, buffer, offset = fields.reassemble(Protocol, data, expectedId)
+  if not fieldId then
     return
   end
   local field = Protocol.fields[fieldId]
-  local chunksRemain = data[4]
-  -- If no field or the chunksremain changed when we have data, don't continue
-  if not field or (Protocol.fieldData and chunksRemain ~= Protocol.expectChunksRemain) then
+  if not field then
+    return
+  end
+  if not buffer then
+    -- Chunk consumed; the next read goes out with the updated chunk index
     return
   end
 
-  local offset
-  -- If data is chunked, copy it to persistent buffer
-  if chunksRemain > 0 or Protocol.fieldChunk > 0 then
-    Protocol.fieldData = Protocol.fieldData or {}
-    for i = 5, #data do
-      Protocol.fieldData[#Protocol.fieldData + 1] = data[i]
-    end
-    offset = 1
-  else
-    -- All data arrived in one chunk, operate directly on data
-    Protocol.fieldData = data
-    offset = 5
-  end
+  -- Field data stream is now complete, process into a field
+  Protocol.loadQueue[#Protocol.loadQueue] = nil
 
-  if chunksRemain > 0 then
-    Protocol.fieldChunk = Protocol.fieldChunk + 1
-    Protocol.expectChunksRemain = chunksRemain - 1
-  else
-    -- Field data stream is now complete, process into a field
-    Protocol.loadQueue[#Protocol.loadQueue] = nil
-
-    -- Hidden-bit changes rebuild the UI's cached list of visible fields, so
-    -- track it across the decode.
-    local wasHidden = field.hidden
-    -- Passing the old name makes the decoder skip its read and reuse that string,
-    -- which is only safe while no reload has flagged the name as possibly changed
-    local cachedName = (not field.nameStale and not field.reloading) and field.name or nil
-    if fields.decodeEntry(field, fieldId, Protocol.fieldData, offset, cachedName) then
-      field.nameStale = nil
-      field.reloading = nil
-      if field.hidden ~= wasHidden then
-        Protocol.fieldHiddenChanged = true
-      end
-
-      if field.type == crsf.CONST.FIELD_COMMAND and field.status == crsf.CONST.CMD_IDLE then
-        -- A command that was actively running just finished (or was cancelled):
-        -- re-read its same-level fields so the current page reflects any values
-        -- the command changed. The guard limits this to the active command --
-        -- routine loads of idle command fields while browsing (fieldPopup is
-        -- nil) must not trigger a reload.
-        if Protocol.fieldPopup == field then
-          Protocol.reloadRelatedFields(field)
-        end
-        Protocol.fieldPopup = nil
-      end
-
-      -- Auto-queue children for root folder (field 0) and during background preloading.
-      if field.type == crsf.CONST.FIELD_FOLDER and field.children and (fieldId == 0 or Protocol.backgroundLoading) then
-        for i = #field.children, 1, -1 do
-          Protocol.loadQueue[#Protocol.loadQueue + 1] = field.children[i]
-        end
-      end
+  -- Hidden-bit changes rebuild the UI's cached list of visible fields, so
+  -- track it across the decode.
+  local wasHidden = field.hidden
+  -- Passing the old name makes the decoder skip its read and reuse that string,
+  -- which is only safe while no reload has flagged the name as possibly changed
+  local cachedName = (not field.nameStale and not field.reloading) and field.name or nil
+  if fields.decodeEntry(field, fieldId, buffer, offset, cachedName) then
+    field.nameStale = nil
+    field.reloading = nil
+    if field.hidden ~= wasHidden then
+      Protocol.fieldHiddenChanged = true
     end
 
-    Protocol.fieldChunk = 0
-    Protocol.fieldData = nil
+    if field.type == crsf.CONST.FIELD_COMMAND and field.status == crsf.CONST.CMD_IDLE then
+      -- A command that was actively running just finished (or was cancelled):
+      -- re-read its same-level fields so the current page reflects any values
+      -- the command changed. The guard limits this to the active command --
+      -- routine loads of idle command fields while browsing (fieldPopup is
+      -- nil) must not trigger a reload.
+      if Protocol.fieldPopup == field then
+        Protocol.reloadRelatedFields(field)
+      end
+      Protocol.fieldPopup = nil
+    end
+
+    -- Auto-queue children for root folder (field 0) and during background preloading.
+    if field.type == crsf.CONST.FIELD_FOLDER and field.children and (fieldId == 0 or Protocol.backgroundLoading) then
+      for i = #field.children, 1, -1 do
+        Protocol.loadQueue[#Protocol.loadQueue + 1] = field.children[i]
+      end
+    end
   end
 end
 
@@ -414,8 +393,7 @@ function Protocol.parseElrsInfoMessage(data)
     return
   end
   if status.id ~= Protocol.deviceId then
-    Protocol.fieldData = nil
-    Protocol.fieldChunk = 0
+    fields.resetChunks(Protocol)
     return
   end
 
@@ -501,10 +479,7 @@ function Protocol.tick()
     Protocol.linkstatTimeout = time + 100
   elseif time > Protocol.fieldTimeout and Protocol.fieldsCount ~= 0 then
     if #Protocol.loadQueue > 0 then
-      crsf.push(
-        crsf.CONST.FRAMETYPE_PARAMETER_READ,
-        { Protocol.deviceId, Protocol.handsetId, Protocol.loadQueue[#Protocol.loadQueue], Protocol.fieldChunk }
-      )
+      fields.sendRead(Protocol, Protocol.loadQueue[#Protocol.loadQueue])
       Protocol.fieldTimeout = time + Protocol.fieldResponseTimeout()
     else
       Protocol.backgroundLoading = false

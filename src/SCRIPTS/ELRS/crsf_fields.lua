@@ -192,6 +192,89 @@ local handlers = {
 }
 
 -- ============================================================================
+-- Chunk reassembly
+--
+-- PARAMETER_SETTINGS_ENTRY payloads larger than the handset link's frame
+-- limit arrive in chunks (CRSFEndpoint::sendParameter). Reassembly state
+-- lives in a caller-owned session table; the library manages these keys:
+--   fieldChunk         next chunk index to request (readable; do not write)
+--   fieldData          reassembly buffer for the in-flight entry
+--   fieldDataId        the field id the buffer belongs to
+--   expectChunksRemain duplicate-frame guard
+-- Consumers initialize fieldChunk = 0 and expectChunksRemain = -1 alongside
+-- their deviceId/handsetId addressing bytes.
+-- ============================================================================
+
+--- Abandon any in-flight reassembly.
+-- @param session  the session table
+function Fields.resetChunks(session)
+  session.fieldChunk = 0
+  session.fieldData = nil
+  session.fieldDataId = nil
+end
+
+--- Feed one PARAMETER_SETTINGS_ENTRY frame into the session.
+-- expectedFieldId selects the consumption model: a caller waiting on one
+-- specific field passes its id (nil while idle drops everything), a caller
+-- listening passively under the poll() fan-out passes data[3] to accept any
+-- field from session.deviceId -- the fieldDataId gate then keeps a
+-- sibling-elicited entry for another field out of an in-flight buffer.
+-- Never mutates data, and never retains it: the single-frame fast path
+-- returns data itself as the buffer, valid only for the current call.
+-- @param session          the session table
+-- @param data             the frame's byte array
+-- @param expectedFieldId  the field id to accept
+-- @return fieldId, buffer, offset  entry complete; buffer[offset] is the
+--         parent byte, ready for decodeEntry
+-- @return fieldId                  chunk consumed, more expected -- send the
+--         next read, which carries the updated session.fieldChunk
+-- @return nil                      frame dropped (wrong device or field,
+--         cross-field continuation, duplicate chunk)
+function Fields.reassemble(session, data, expectedFieldId)
+  -- Another device answered, or this is not the awaited field: drop any
+  -- partial data
+  if data[2] ~= session.deviceId or data[3] ~= expectedFieldId then
+    Fields.resetChunks(session)
+    return nil
+  end
+  -- An in-flight buffer only accepts continuation frames for its own field
+  if session.fieldData and session.fieldDataId ~= data[3] then
+    return nil
+  end
+  local chunksRemain = data[4]
+  -- chunksRemain changed while data is buffered: duplicate frame, drop it
+  if session.fieldData and chunksRemain ~= session.expectChunksRemain then
+    return nil
+  end
+
+  local buffer
+  local offset
+  -- If data is chunked, copy it to the persistent buffer
+  if chunksRemain > 0 or session.fieldChunk > 0 then
+    session.fieldData = session.fieldData or {}
+    session.fieldDataId = data[3]
+    buffer = session.fieldData
+    for i = 5, #data do
+      buffer[#buffer + 1] = data[i]
+    end
+    offset = 1
+  else
+    -- All data arrived in one chunk, hand the frame back directly
+    buffer = data
+    offset = 5
+  end
+
+  if chunksRemain > 0 then
+    session.fieldChunk = session.fieldChunk + 1
+    session.expectChunksRemain = chunksRemain - 1
+    return data[3]
+  end
+
+  Fields.resetChunks(session)
+  return data[3], buffer, offset
+end
+
+-- ============================================================================
 -- Entry decode
 -- ============================================================================
 
@@ -239,6 +322,15 @@ end
 -- bytes: session.deviceId (the target device) and session.handsetId (the
 -- reply-to address). Wire layouts match the tables in CRSFParameters.h.
 -- ============================================================================
+
+--- Request one chunk of a field's PARAMETER_SETTINGS_ENTRY. The chunk index
+-- rides in session.fieldChunk, so follow-up reads of a chunked entry continue
+-- where reassemble() left off (0 requests a fresh entry).
+-- @param session  table with deviceId/handsetId and fieldChunk
+-- @param fieldId  the field id to read
+function Fields.sendRead(session, fieldId)
+  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_READ, { session.deviceId, session.handsetId, fieldId, session.fieldChunk })
+end
 
 --- Send a PARAMETER_WRITE carrying a field's integer value, big-endian at the
 -- field's width. field.size < 0 marks a signed field |size| bytes wide
