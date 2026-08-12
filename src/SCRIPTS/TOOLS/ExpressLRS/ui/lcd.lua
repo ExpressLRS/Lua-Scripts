@@ -522,7 +522,7 @@ function UI.handleEvent(event)
         elseif not field.disabled and ft <= crsf.CONST.FIELD_TEXT_SELECTION then
           UI.edit = not UI.edit
           if not UI.edit then
-            Protocol.fieldIntSave(field)
+            fields.sendWriteInt(Protocol, field)
             Protocol.reloadRelatedFields(field)
           end
         end
