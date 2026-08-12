@@ -453,9 +453,6 @@ function Protocol.writeConfig()
   end
 
   local desiredPit = d.pitmode
-  if type(desiredPit) == "boolean" then
-    desiredPit = desiredPit and 1 or 0
-  end
   local currentPit = s.pitmode and 1 or 0
   if desiredPit ~= currentPit then
     Protocol.writeQueue[#Protocol.writeQueue + 1] = { VTX.ids.pitmode, desiredPit }
@@ -1005,10 +1002,7 @@ end
 local screenId = getScreenId()
 local uiPath = table.concat({ "/WIDGETS/ELRSVTXAdmin/ui/", screenId, ".lua" })
 local WidgetUI = loadScript(uiPath)({
-  crsf = crsf,
   VTX = VTX,
-  Protocol = Protocol,
-  Presets = Presets,
   bgOpacity = bgOpacity,
   VTXDisplay = VTXDisplay,
   WidgetLayout = WidgetLayout,

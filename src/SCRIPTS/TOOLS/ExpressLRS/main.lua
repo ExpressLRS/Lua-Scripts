@@ -30,13 +30,6 @@ local App = {
   shouldExit = false,
 }
 
-function App.reset()
-  App.crsfModuleChecked = false
-  App.crsfModuleFound = false
-  App.shouldExit = false
-  Protocol.reset()
-end
-
 function App.checkCrsfModule()
   if App.crsfModuleChecked then
     return App.crsfModuleFound

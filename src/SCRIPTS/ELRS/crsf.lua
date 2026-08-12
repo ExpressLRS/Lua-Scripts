@@ -198,29 +198,7 @@ function CRSF:registerHandler(frameType, callback)
   if not self._handlers[frameType] then
     self._handlers[frameType] = {}
   end
-  -- Avoid duplicate registration
-  for _, cb in ipairs(self._handlers[frameType]) do
-    if cb == callback then
-      return
-    end
-  end
   self._handlers[frameType][#self._handlers[frameType] + 1] = callback
-end
-
---- Remove a previously registered callback.
--- @param frameType  numeric frame type
--- @param callback   the exact function reference to remove
-function CRSF:unregisterHandler(frameType, callback)
-  local handlers = self._handlers[frameType]
-  if not handlers then
-    return
-  end
-  for i = #handlers, 1, -1 do
-    if handlers[i] == callback then
-      shim.tableRemove(handlers, i)
-      return
-    end
-  end
 end
 
 -- ============================================================================
@@ -380,7 +358,6 @@ local function onDeviceInfo(data)
   info.vMaj = vMaj
   info.vMin = vMin
   info.vRev = vRev
-  info.vStr = string.format("%s (%d.%d.%d)", name, vMaj, vMin, vRev)
 
   -- Serial number "ELRS" identifies an ExpressLRS module. Other CRSF modules
   -- answer DEVICE_PING too, but only ELRS answers the fieldId=0 status request.

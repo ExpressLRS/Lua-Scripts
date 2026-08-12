@@ -5,7 +5,6 @@
 
 local ctx = ...
 local VTX = ctx.VTX
-local Protocol = ctx.Protocol
 local bgOpacity = ctx.bgOpacity
 local VTXDisplay = ctx.VTXDisplay
 local WidgetLayout = ctx.WidgetLayout

@@ -14,9 +14,6 @@ local Protocol = {
   DEVICE = 128,
   DEVICE_FOLDER = 129,
 
-  -- Handlers dispatch table (populated after function definitions)
-  handlers = {},
-
   -- Device identity (used in every CRSF frame)
   deviceId = crsf.CONST.ADDRESS_TX,
   handsetId = crsf.CONST.ADDRESS_HANDSET_ELRS,
@@ -53,40 +50,6 @@ local Protocol = {
   -- Telemetry transition tracking (for auto-discovery on reconnect)
   hadTelemetry = false,
 }
-
--- ============================================================================
--- Reset
--- ============================================================================
-
-function Protocol.reset()
-  Protocol.deviceId = crsf.CONST.ADDRESS_TX
-  Protocol.handsetId = crsf.CONST.ADDRESS_HANDSET_ELRS
-  Protocol.deviceName = nil
-  Protocol.deviceIsELRS_TX = nil
-
-  Protocol.fields = {}
-  Protocol.fieldsCount = 0
-  Protocol.fieldPopup = nil
-
-  Protocol.devices = {}
-
-  Protocol.elrsFlags = 0
-  Protocol.elrsFlagsInfo = ""
-  Protocol.elrsV1Detected = false
-  Protocol.receivedPackets = nil
-  Protocol.lostPackets = nil
-
-  Protocol.linkstatTimeout = 100
-  Protocol.pingTimeout = 0
-
-  Protocol.fieldTimeout = 0
-  Protocol.fieldChunk = 0
-  Protocol.fieldData = nil
-  Protocol.loadQueue = {}
-  Protocol.expectChunksRemain = -1
-  Protocol.backgroundLoading = false
-  Protocol.hadTelemetry = false
-end
 
 -- Check if telemetry is being received from the RX (elrsFlags bit 1)
 function Protocol.hasTelemetry()
@@ -520,20 +483,20 @@ end
 -- ============================================================================
 
 Protocol.handlers = {
-  [crsf.CONST.FIELD_UINT8 + 1] = { load = Protocol.fieldIntLoad, save = Protocol.fieldIntSave },
-  [crsf.CONST.FIELD_INT8 + 1] = { load = Protocol.fieldIntLoad, save = Protocol.fieldIntSave },
-  [crsf.CONST.FIELD_UINT16 + 1] = { load = Protocol.fieldIntLoad, save = Protocol.fieldIntSave },
-  [crsf.CONST.FIELD_INT16 + 1] = { load = Protocol.fieldIntLoad, save = Protocol.fieldIntSave },
+  [crsf.CONST.FIELD_UINT8 + 1] = Protocol.fieldIntLoad,
+  [crsf.CONST.FIELD_INT8 + 1] = Protocol.fieldIntLoad,
+  [crsf.CONST.FIELD_UINT16 + 1] = Protocol.fieldIntLoad,
+  [crsf.CONST.FIELD_INT16 + 1] = Protocol.fieldIntLoad,
   [crsf.CONST.FIELD_UINT32 + 1] = nil,
   [crsf.CONST.FIELD_INT32 + 1] = nil,
   [crsf.CONST.FIELD_UINT64 + 1] = nil,
   [crsf.CONST.FIELD_INT64 + 1] = nil,
-  [crsf.CONST.FIELD_FLOAT + 1] = { load = Protocol.fieldFloatLoad, save = Protocol.fieldIntSave },
-  [crsf.CONST.FIELD_TEXT_SELECTION + 1] = { load = Protocol.fieldTextSelLoad, save = Protocol.fieldIntSave },
-  [crsf.CONST.FIELD_STRING + 1] = { load = Protocol.fieldStringLoad, save = Protocol.fieldStringSave },
-  [crsf.CONST.FIELD_FOLDER + 1] = { load = Protocol.fieldFolderLoad, save = nil },
-  [crsf.CONST.FIELD_INFO + 1] = { load = Protocol.fieldStringLoad, save = nil },
-  [crsf.CONST.FIELD_COMMAND + 1] = { load = Protocol.fieldCommandLoad, save = Protocol.handleCommandSave },
+  [crsf.CONST.FIELD_FLOAT + 1] = Protocol.fieldFloatLoad,
+  [crsf.CONST.FIELD_TEXT_SELECTION + 1] = Protocol.fieldTextSelLoad,
+  [crsf.CONST.FIELD_STRING + 1] = Protocol.fieldStringLoad,
+  [crsf.CONST.FIELD_FOLDER + 1] = Protocol.fieldFolderLoad,
+  [crsf.CONST.FIELD_INFO + 1] = Protocol.fieldStringLoad,
+  [crsf.CONST.FIELD_COMMAND + 1] = Protocol.fieldCommandLoad,
 }
 
 -- ============================================================================
@@ -578,7 +541,6 @@ function Protocol.parseParameterInfoMessage(data)
     Protocol.fieldData = Protocol.fieldData or {}
     for i = 5, #data do
       Protocol.fieldData[#Protocol.fieldData + 1] = data[i]
-      data[i] = nil
     end
     offset = 1
   else
@@ -611,9 +573,9 @@ function Protocol.parseParameterInfoMessage(data)
       field.name, offset = Protocol.fieldGetStrOrOpts(Protocol.fieldData, offset + 2, cachedName)
       field.nameStale = nil
       field.reloading = nil
-      local handler = Protocol.handlers[field.type + 1]
-      if handler and handler.load then
-        handler.load(field, Protocol.fieldData, offset)
+      local load = Protocol.handlers[field.type + 1]
+      if load then
+        load(field, Protocol.fieldData, offset)
       end
       if field.min == 0 then
         field.min = nil

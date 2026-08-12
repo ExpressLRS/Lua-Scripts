@@ -11,7 +11,6 @@ local Protocol = deps.Protocol
 local crsf = deps.crsf
 local VERSION = deps.VERSION
 
-local VERSION_CHECK_ENABLED = true
 local versionCheckResult = nil
 
 local function checkEdgeTxVersion()
@@ -41,7 +40,8 @@ local UI = {
   -- Visible field list (rebuilt on invalidate)
   visibleFields = nil,
 
-  -- Layout constants (set in UI.init)
+  -- Layout constants for 128x64; UI.init widens COL2 at 212px wide and
+  -- raises maxLineIndex at 96px tall
   COL1 = 0,
   COL2 = 70,
   maxLineIndex = 6,
@@ -58,7 +58,6 @@ local UI = {
   titleShowWarnTimeout = 100,
 
   -- Warning dismissal (model mismatch)
-  warningDismissed = false,
   warningDismissedAt = nil,
 
   -- Command popup spinner
@@ -72,21 +71,12 @@ local UI = {
 function UI.init()
   if LCD_W == 212 then
     UI.COL2 = 110
-  else
-    UI.COL2 = 70
   end
   if LCD_H == 96 then
     UI.maxLineIndex = 9
-  else
-    UI.maxLineIndex = 6
   end
-  UI.COL1 = 0
-  UI.textYoffset = 3
-  UI.textSize = 8
 
-  if VERSION_CHECK_ENABLED then
-    versionCheckResult = checkEdgeTxVersion()
-  end
+  versionCheckResult = checkEdgeTxVersion()
 end
 
 -- ============================================================================
@@ -94,7 +84,7 @@ end
 -- ============================================================================
 
 function UI.preCheck(event)
-  if versionCheckResult == false then
+  if not versionCheckResult then
     UI.drawAlert("Unsupported", {
       "Requires EdgeTX:",
       "- 2.11.6 or later",
@@ -177,22 +167,13 @@ function UI.render(event, _touchState)
   end
 
   -- Warning dismissal cooldown (60s before re-showing)
-  if UI.warningDismissedAt then
-    if Protocol.elrsFlags <= crsf.CONST.ELRS_FLAGS_STATUS_MASK then
-      if time - UI.warningDismissedAt > 6000 then
-        UI.warningDismissed = false
-        UI.warningDismissedAt = nil
-      end
-    elseif UI.warningDismissed and time - UI.warningDismissedAt > 6000 then
-      UI.warningDismissed = false
-      UI.warningDismissedAt = nil
-    end
+  if UI.warningDismissedAt and time - UI.warningDismissedAt > 6000 then
+    UI.warningDismissedAt = nil
   end
 
   -- Model mismatch alert (full-screen, blocks normal rendering)
-  if Protocol.isModelMismatch() and not UI.warningDismissed then
+  if Protocol.isModelMismatch() and not UI.warningDismissedAt then
     if event == EVT_VIRTUAL_ENTER then
-      UI.warningDismissed = true
       UI.warningDismissedAt = getTime()
       UI.forceRedraw = true
       return
@@ -391,9 +372,6 @@ end
 
 function UI.selectField(step)
   local count = UI.getSelectableCount()
-  if count == 0 then
-    return
-  end
   local fieldCount = UI.getFieldCount()
   local newLineIndex = UI.lineIndex
   repeat
@@ -508,10 +486,6 @@ end
 -- ============================================================================
 
 function UI.handleEvent(event)
-  if UI.getSelectableCount() == 0 then
-    return
-  end
-
   if event == EVT_VIRTUAL_EXIT then
     if UI.edit then
       UI.edit = nil

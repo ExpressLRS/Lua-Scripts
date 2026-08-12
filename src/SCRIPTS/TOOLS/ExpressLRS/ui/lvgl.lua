@@ -11,8 +11,6 @@ local Protocol = deps.Protocol
 local crsf = deps.crsf
 local VERSION = deps.VERSION
 
-local VERSION_CHECK_ENABLED = true
-
 -- ============================================================================
 -- UI state
 -- ============================================================================
@@ -23,7 +21,6 @@ local UI = {
   folderWasReady = false,
 
   -- Warning/command state (LVGL-specific)
-  warningDismissed = false,
   warningDismissedAt = nil,
   warningDialog = nil,
   commandDialog = nil,
@@ -414,9 +411,7 @@ end
 -- ============================================================================
 
 function UI.init()
-  if VERSION_CHECK_ENABLED then
-    versionCheckResult = checkEdgeTxVersion()
-  end
+  versionCheckResult = checkEdgeTxVersion()
 end
 
 -- ============================================================================
@@ -424,7 +419,7 @@ end
 -- ============================================================================
 
 function UI.preCheck(_event)
-  if versionCheckResult == false then
+  if not versionCheckResult then
     if not UI.uiBuilt then
       showVersionRequired()
       UI.uiBuilt = true
@@ -576,14 +571,12 @@ local function handleWarning()
     return
   end
   if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK then
-    if not UI.warningDialog and not UI.warningDismissed then
+    if not UI.warningDialog and not UI.warningDismissedAt then
       if Protocol.isModelMismatch() then
         UI.warningDialog = ModelMismatchDialog.show(function()
-          UI.warningDismissed = true
           UI.warningDismissedAt = getTime()
           UI.invalidate()
         end, function()
-          UI.warningDismissed = true
           App.shouldExit = true
         end)
       elseif Protocol.hasCriticalError() then
@@ -592,21 +585,16 @@ local function handleWarning()
           message = Protocol.elrsFlagsInfo,
         })
         UI.warningDialog = true
-        UI.warningDismissed = true
         UI.warningDismissedAt = getTime()
       end
     end
-    if UI.warningDismissed and UI.warningDismissedAt then
-      if getTime() - UI.warningDismissedAt > 6000 then
-        UI.warningDismissed = false
-        UI.warningDismissedAt = nil
-        UI.warningDialog = nil
-      end
+    if UI.warningDismissedAt and getTime() - UI.warningDismissedAt > 6000 then
+      UI.warningDismissedAt = nil
+      UI.warningDialog = nil
     end
   else
     UI.warningDialog = nil
-    if not UI.warningDismissedAt or (getTime() - UI.warningDismissedAt > 6000) then
-      UI.warningDismissed = false
+    if UI.warningDismissedAt and getTime() - UI.warningDismissedAt > 6000 then
       UI.warningDismissedAt = nil
     end
   end
@@ -961,16 +949,12 @@ function UI.createCommandWidget(pg, field)
   })
 end
 
-function UI.buildFieldWidget(pg, field, folderWidth)
+function UI.buildFieldWidget(pg, field)
   if not field then
     return
   end
 
   local fieldType = field.type
-
-  if fieldType == crsf.CONST.FIELD_FOLDER then
-    return UI.createFolderWidget(pg, field, folderWidth)
-  end
 
   if fieldType == crsf.CONST.FIELD_COMMAND then
     return UI.createCommandWidget(pg, field)
