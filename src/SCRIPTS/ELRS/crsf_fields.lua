@@ -233,6 +233,81 @@ function Fields.decodeEntry(field, fieldId, buffer, offset, cachedName)
 end
 
 -- ============================================================================
+-- Frame senders
+--
+-- Every sender takes a caller-owned session table and reads its addressing
+-- bytes: session.deviceId (the target device) and session.handsetId (the
+-- reply-to address). Wire layouts match the tables in CRSFParameters.h.
+-- ============================================================================
+
+--- Send a PARAMETER_WRITE carrying a field's integer value, big-endian at the
+-- field's width. field.size < 0 marks a signed field |size| bytes wide
+-- (decodeEntry's convention); negative values are re-encoded as two's
+-- complement. A missing size means 1 byte.
+-- @param session  table with deviceId/handsetId
+-- @param field    table with id, value and optional size
+function Fields.sendWriteInt(session, field)
+  local value = field.value
+  local size = field.size or 1
+  if size < 0 then
+    size = -size
+    if value < 0 then
+      value = bit32.lshift(0x100, (size - 1) * 8) + value
+    end
+  end
+
+  local frame = { session.deviceId, session.handsetId, field.id }
+  for i = size - 1, 0, -1 do
+    frame[#frame + 1] = bit32.rshift(value, 8 * i) % 256
+  end
+  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame)
+end
+
+--- Send a PARAMETER_WRITE carrying a field's string value, clamped to
+-- field.maxlen (default 32), inner NULs stripped, null-terminated.
+-- @param session  table with deviceId/handsetId
+-- @param field    table with id, value and optional maxlen
+function Fields.sendWriteString(session, field)
+  local frame = { session.deviceId, session.handsetId, field.id }
+  local val = field.value or ""
+  local maxlen = field.maxlen or 32
+  if #val > maxlen then
+    val = string.sub(val, 1, maxlen)
+  end
+  for i = 1, #val do
+    local b = string.byte(val, i)
+    if b ~= 0 then
+      frame[#frame + 1] = b
+    end
+  end
+  frame[#frame + 1] = 0
+  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame)
+end
+
+--- Send a command-step PARAMETER_WRITE: one byte from the commandStep_e
+-- machine (crsf.CONST.CMD_CLICK / CMD_CONFIRMED / CMD_CANCEL / CMD_QUERY).
+-- @param session  table with deviceId/handsetId
+-- @param fieldId  the command field's id
+-- @param step     the command step byte
+function Fields.sendCommandStep(session, fieldId, step)
+  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { session.deviceId, session.handsetId, fieldId, step })
+end
+
+-- Pseudo-field id: a PARAMETER_WRITE to this id calls supressCriticalErrors()
+-- in TXModuleEndpoint.cpp (the firmware matches the bare 0x2E literal).
+local FIELD_ID_SUPPRESS_CRITICAL_ERRORS = 0x2E
+
+--- Ask the module to stop reporting its critical error flags (the bits above
+-- crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD in the ELRS status byte).
+-- @param session  table with deviceId/handsetId
+function Fields.sendSuppressCriticalErrors(session)
+  crsf.push(
+    crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
+    { session.deviceId, session.handsetId, FIELD_ID_SUPPRESS_CRITICAL_ERRORS, 0 }
+  )
+end
+
+-- ============================================================================
 -- Return codec table
 -- ============================================================================
 

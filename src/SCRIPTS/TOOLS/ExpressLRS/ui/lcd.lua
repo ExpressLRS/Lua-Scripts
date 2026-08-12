@@ -9,6 +9,7 @@ local App = deps.App
 local Navigation = deps.Navigation
 local Protocol = deps.Protocol
 local crsf = deps.crsf
+local fields = deps.fields
 local VERSION = deps.VERSION
 
 local versionCheckResult = nil
@@ -498,8 +499,7 @@ function UI.handleEvent(event)
     end
   elseif event == EVT_VIRTUAL_ENTER then
     if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
-      Protocol.elrsFlags = 0
-      crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { Protocol.deviceId, Protocol.handsetId, 0x2E, 0x00 })
+      Protocol.suppressCriticalErrors()
     elseif UI.isOnBackExit() then
       if Navigation.isAtRoot() then
         App.shouldExit = true
@@ -591,11 +591,13 @@ end
 
 function UI.drawPopup(event)
   if event == EVT_VIRTUAL_EXIT then
-    crsf.push(
-      crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
-      { Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL }
-    )
-    Protocol.fieldTimeout = getTime() + 200
+    local status = Protocol.fieldPopup.status
+    if status ~= crsf.CONST.CMD_ASKCONFIRM and status ~= crsf.CONST.CMD_EXECUTING then
+      -- No dialog is on screen yet (e.g. CMD_CLICK just went out): request the
+      -- cancel but keep the popup up until the device reports CMD_IDLE. The
+      -- dialog branches below handle their own cancel via popupConfirmation.
+      Protocol.commandRequestCancel()
+    end
   end
 
   if Protocol.fieldPopup.status == crsf.CONST.CMD_ASKCONFIRM then
@@ -604,7 +606,7 @@ function UI.drawPopup(event)
     if result == "OK" then
       Protocol.commandConfirm()
     elseif result == "CANCEL" then
-      Protocol.fieldPopup = nil
+      Protocol.commandCancel()
     end
   elseif Protocol.fieldPopup.status == crsf.CONST.CMD_EXECUTING then
     if Protocol.fieldChunk == 0 then

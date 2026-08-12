@@ -102,6 +102,7 @@ local function init()
     Navigation = Navigation,
     Protocol = Protocol,
     crsf = crsf,
+    fields = fields,
     VERSION = VERSION,
   }
   if useLvgl then

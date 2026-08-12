@@ -225,44 +225,6 @@ function Protocol.startBackgroundLoad()
 end
 
 -- ============================================================================
--- Field save functions
--- ============================================================================
-
-function Protocol.fieldIntSave(field)
-  local value = field.value
-  local size = field.size or 1
-  if size < 0 then
-    size = -size
-    if value < 0 then
-      value = bit32.lshift(0x100, (size - 1) * 8) + value
-    end
-  end
-
-  local frame = { Protocol.deviceId, Protocol.handsetId, field.id }
-  for i = size - 1, 0, -1 do
-    frame[#frame + 1] = bit32.rshift(value, 8 * i) % 256
-  end
-  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame)
-end
-
-function Protocol.fieldStringSave(field)
-  local frame = { Protocol.deviceId, Protocol.handsetId, field.id }
-  local val = field.value or ""
-  local maxlen = field.maxlen or 32
-  if #val > maxlen then
-    val = string.sub(val, 1, maxlen)
-  end
-  for i = 1, #val do
-    local b = string.byte(val, i)
-    if b ~= 0 then
-      frame[#frame + 1] = b
-    end
-  end
-  frame[#frame + 1] = 0
-  crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, frame)
-end
-
--- ============================================================================
 -- Related fields reload (for value changes)
 -- ============================================================================
 
@@ -307,7 +269,7 @@ function Protocol.handleCommandSave(field)
   if field.status ~= nil then
     if field.status < crsf.CONST.CMD_CONFIRMED then
       field.status = crsf.CONST.CMD_CLICK
-      crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { Protocol.deviceId, Protocol.handsetId, field.id, field.status })
+      fields.sendCommandStep(Protocol, field.id, crsf.CONST.CMD_CLICK)
       Protocol.fieldPopup = field
       Protocol.fieldPopup.lastStatus = crsf.CONST.CMD_IDLE
       Protocol.fieldTimeout = getTime() + field.timeout
@@ -317,23 +279,36 @@ end
 
 function Protocol.commandConfirm()
   if Protocol.fieldPopup then
-    crsf.push(
-      crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
-      { Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_CONFIRMED }
-    )
+    fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_CONFIRMED)
     Protocol.fieldTimeout = getTime() + Protocol.fieldPopup.timeout
     Protocol.fieldPopup.status = crsf.CONST.CMD_CONFIRMED
   end
 end
 
+-- Cancel and dismiss: sends CMD_CANCEL and drops the popup immediately.
 function Protocol.commandCancel()
   if Protocol.fieldPopup then
-    crsf.push(
-      crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
-      { Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL }
-    )
+    fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL)
     Protocol.fieldPopup = nil
   end
+end
+
+-- Cancel but keep the popup: sends CMD_CANCEL and waits for the device to
+-- report CMD_IDLE, which dismisses the popup through the entry decode. Used
+-- while no dialog is on screen yet (e.g. right after CMD_CLICK), so the UI
+-- keeps tracking the device's actual command state.
+function Protocol.commandRequestCancel()
+  if Protocol.fieldPopup then
+    fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_CANCEL)
+    Protocol.fieldTimeout = getTime() + 200
+  end
+end
+
+-- Clear the ELRS critical-error banner: optimistic local clear plus the
+-- suppress write the module acts on.
+function Protocol.suppressCriticalErrors()
+  Protocol.elrsFlags = 0
+  fields.sendSuppressCriticalErrors(Protocol)
 end
 
 -- ============================================================================
@@ -510,10 +485,7 @@ function Protocol.tick()
 
   if Protocol.fieldPopup then
     if time > Protocol.fieldTimeout and Protocol.fieldPopup.status ~= crsf.CONST.CMD_ASKCONFIRM then
-      crsf.push(
-        crsf.CONST.FRAMETYPE_PARAMETER_WRITE,
-        { Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, crsf.CONST.CMD_QUERY }
-      )
+      fields.sendCommandStep(Protocol, Protocol.fieldPopup.id, crsf.CONST.CMD_QUERY)
       Protocol.fieldTimeout = time + Protocol.fieldPopup.timeout
     end
   elseif time > Protocol.linkstatTimeout then
