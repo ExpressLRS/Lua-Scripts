@@ -210,7 +210,7 @@ function CRSF:poll()
   -- about the link. Derived after the drain so a frame from a dying connection
   -- is dispatched before consumers observe the flip; handlers that keep
   -- per-connection state key their resets off that ordering (see
-  -- /SCRIPTS/ELRS/elrsinfo.lua).
+  -- /SCRIPTS/ELRS/crsf_elrsinfo.lua).
   self.hasTelemetry = (CRSF.getSensorValue("RQly") or 0) > 0
 end
 
