@@ -17,7 +17,7 @@ local function create(zone, options)
     _crsfSingleton = getCRSF()
   end
   if not _elrsInfoSingleton then
-    local getElrsInfo = loadScript("/SCRIPTS/ELRS/elrsinfo.lua")
+    local getElrsInfo = loadScript("/SCRIPTS/ELRS/crsf_elrsinfo.lua")
     ---@diagnostic disable-next-line: need-check-nil
     _elrsInfoSingleton = getElrsInfo(_crsfSingleton)
   end

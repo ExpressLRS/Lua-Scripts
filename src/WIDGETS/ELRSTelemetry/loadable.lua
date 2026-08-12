@@ -3,7 +3,7 @@
 -- Loaded via loadScript() from ELRSTelemetry/main.lua                  --
 --                                                                      --
 -- Displays ELRS link telemetry using LVGL. Uses the shared CRSF        --
--- singleton for transport and elrsinfo.lua for device info/model match.--
+-- singleton for transport and crsf_elrsinfo.lua for device info/match. --
 --                                                                      --
 -- UI is loaded from a screen-specific file in ui/ based on LCD_W/LCD_H.--
 ---------------------------------------------------------------------------

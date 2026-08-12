@@ -9,6 +9,7 @@ local App = deps.App
 local Navigation = deps.Navigation
 local Protocol = deps.Protocol
 local crsf = deps.crsf
+local fields = deps.fields
 local VERSION = deps.VERSION
 
 -- ============================================================================
@@ -572,14 +573,14 @@ local function handleWarning()
   end
   if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK then
     if not UI.warningDialog and not UI.warningDismissedAt then
-      if Protocol.isModelMismatch() then
+      if Protocol.modelMismatch then
         UI.warningDialog = ModelMismatchDialog.show(function()
           UI.warningDismissedAt = getTime()
           UI.invalidate()
         end, function()
           App.shouldExit = true
         end)
-      elseif Protocol.hasCriticalError() then
+      elseif Protocol.criticalError then
         Dialogs.showMessage({
           title = "Warning",
           message = Protocol.elrsFlagsInfo,
@@ -640,7 +641,7 @@ function UI.getSubtitle()
 
   local subtitle = ""
   if Protocol.receivedPackets then
-    local state = Protocol.hasTelemetry() and "Telemetry OK" or "No telemetry"
+    local state = Protocol.connected and "Telemetry OK" or "No telemetry"
     subtitle = string.format("%u/%u • %s", Protocol.lostPackets, Protocol.receivedPackets, state)
   end
 
@@ -700,7 +701,7 @@ function UI.createToggleRow(pg, field)
             end,
             set = function(val)
               field.value = val
-              Protocol.fieldIntSave(field)
+              fields.sendWriteInt(Protocol, field)
               Protocol.reloadRelatedFields(field)
             end,
             active = function()
@@ -765,7 +766,7 @@ function UI.createChoiceRow(pg, field)
     end,
     set = function(val)
       field.value = val - 1
-      Protocol.fieldIntSave(field)
+      fields.sendWriteInt(Protocol, field)
       Protocol.reloadRelatedFields(field)
     end,
     active = function()
@@ -804,7 +805,7 @@ function UI.createNumberRow(pg, field)
     end,
     edited = function(val)
       field.value = val
-      Protocol.fieldIntSave(field)
+      fields.sendWriteInt(Protocol, field)
       Protocol.reloadRelatedFields(field)
     end,
     display = function(val)
@@ -900,7 +901,7 @@ function UI.createStringRow(pg, field)
           length = math.min(math.max(field.maxlen or 32, 32), 128),
           set = function(val)
             field.value = val
-            Protocol.fieldStringSave(field)
+            fields.sendWriteString(Protocol, field)
             Protocol.reloadRelatedFields(field)
           end,
           active = function()
