@@ -218,36 +218,34 @@ end
 -- Shared helpers
 -- ============================================================================
 
---- Parse a null-terminated string from a CRSF data array.
--- Modifies data in-place (bytes -> chars) for efficiency: poll() hands the
--- same data table to every handler registered for a frame type, so a handler
--- running after this one sees 1-char strings, not bytes, over
--- [off, nextOffset - 2].
+--- Read a null-terminated string from a CRSF data array without mutating it.
+-- poll() hands the same data table to every handler registered for a frame
+-- type, so decoding must never write into the frame.
 -- @param data   array of byte values
 -- @param off    1-based start offset
 -- @return string, nextOffset
-function CRSF:fieldGetString(data, off)
-  local startOff = off
+local function readString(data, off)
+  local parts = {}
   local b = data[off]
   while b and b ~= 0 do
-    data[off] = string.char(b)
+    parts[#parts + 1] = string.char(b)
     off = off + 1
     b = data[off]
   end
-  return shim.tableConcat(data, nil, startOff, off - 1), off + 1
+  return shim.tableConcat(parts), off + 1
 end
 
 --- Decode a DEVICE_INFO (0x29) frame.
 -- Payload after [dest, src]: name (null-terminated), serial (4B BE),
 -- hwVer (4B), swVer (4B, low three bytes are maj.min.rev), fieldCount (1B),
--- parameter protocol version (1B). Consumes the name bytes in place (see
--- fieldGetString). No address gate: callers gate on the returned id.
+-- parameter protocol version (1B). No address gate: callers gate on the
+-- returned id.
 -- @param data  array of byte values
 -- @return table with id (source address), name, isElrs (true/nil), fieldCount,
 --         vMaj, vMin, vRev -- or nil if the frame is shorter than the layout
 function CRSF:decodeDeviceInfo(data)
   local id = data[2]
-  local name, off = self:fieldGetString(data, 3)
+  local name, off = readString(data, 3)
   if data[off + 12] == nil then
     return nil -- shorter than the fixed layout; the caller's ping retries
   end
@@ -264,8 +262,7 @@ function CRSF:decodeDeviceInfo(data)
 end
 
 --- Decode an ELRS_STATUS (0x2E) frame (the answer to requestElrsStatus()).
--- Consumes the warning bytes in place (see fieldGetString). No address gate:
--- callers gate on the returned id.
+-- No address gate: callers gate on the returned id.
 -- @param data  array of byte values
 -- @return table with id (source address), lostPackets, receivedPackets, flags
 --         (raw byte, for threshold checks), connected / modelMismatch /
@@ -277,7 +274,7 @@ function CRSF:decodeElrsStatus(data)
     return nil
   end
   local flags = data[6]
-  local warning = self:fieldGetString(data, 7)
+  local warning = readString(data, 7)
   return {
     id = data[2],
     lostPackets = data[3],

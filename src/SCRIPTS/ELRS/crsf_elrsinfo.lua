@@ -289,9 +289,6 @@ local function onElrsStatus(data)
   ElrsInfo.modelMismatch = status.modelMismatch
 end
 
--- Sole byte-level consumer of these frame types in this Lua state: the
--- decoders consume string bytes in place, so a handler registered behind
--- these would see decoded chars, not bytes.
 crsf:registerHandler(crsf.CONST.FRAMETYPE_DEVICE_INFO, onDeviceInfo)
 crsf:registerHandler(crsf.CONST.FRAMETYPE_ELRS_STATUS, onElrsStatus)
 

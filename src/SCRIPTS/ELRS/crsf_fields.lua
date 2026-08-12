@@ -9,8 +9,7 @@
 --                                                                       --
 -- Purity rule: nothing in this file mutates a frame data table.         --
 -- crsf:poll() hands the same table to every registered handler, so an   --
--- in-place decode here would corrupt the frame for sibling handlers     --
--- (the hazard crsf.lua's fieldGetString documents).                     --
+-- in-place decode here would corrupt the frame for sibling handlers.    --
 --                                                                       --
 -- Loaded via loadScript("/SCRIPTS/ELRS/crsf_fields.lua")(crsf).         --
 -- Returns the codec table directly.                                     --
