@@ -15,9 +15,9 @@ local useLvgl = (lvgl ~= nil)
 -- Load shared modules
 -- ============================================================================
 
-local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
 local crsf = loadScript("/SCRIPTS/ELRS/crsf.lua")()
-local Protocol = loadScript("/SCRIPTS/TOOLS/ExpressLRS/protocol.lua")(crsf, shim)
+local fields = loadScript("/SCRIPTS/ELRS/crsf_fields.lua")(crsf)
+local Protocol = loadScript("/SCRIPTS/TOOLS/ExpressLRS/protocol.lua")(crsf, fields)
 local Navigation = loadScript("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")()
 
 -- ============================================================================
