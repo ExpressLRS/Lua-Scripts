@@ -237,6 +237,69 @@ function CRSF:fieldGetString(data, off)
   return shim.tableConcat(data, nil, startOff, off - 1), off + 1
 end
 
+--- Decode a DEVICE_INFO (0x29) frame.
+-- Payload after [dest, src]: name (null-terminated), serial (4B BE),
+-- hwVer (4B), swVer (4B, low three bytes are maj.min.rev), fieldCount (1B),
+-- parameter protocol version (1B). Consumes the name bytes in place (see
+-- fieldGetString). No address gate: callers gate on the returned id.
+-- @param data  array of byte values
+-- @return table with id (source address), name, isElrs (true/nil), fieldCount,
+--         vMaj, vMin, vRev -- or nil if the frame is shorter than the layout
+function CRSF:decodeDeviceInfo(data)
+  local id = data[2]
+  local name, off = self:fieldGetString(data, 3)
+  if data[off + 12] == nil then
+    return nil -- shorter than the fixed layout; the caller's ping retries
+  end
+  local serial = ((data[off] * 256 + data[off + 1]) * 256 + data[off + 2]) * 256 + data[off + 3]
+  return {
+    id = id,
+    name = name,
+    isElrs = (serial == CRSF.CONST.ELRS_SERIAL_ID) or nil,
+    fieldCount = data[off + 12],
+    vMaj = data[off + 9],
+    vMin = data[off + 10],
+    vRev = data[off + 11],
+  }
+end
+
+--- Decode an ELRS_STATUS (0x2E) frame (the answer to requestElrsStatus()).
+-- Consumes the warning bytes in place (see fieldGetString). No address gate:
+-- callers gate on the returned id.
+-- @param data  array of byte values
+-- @return table with id (source address), lostPackets, receivedPackets, flags
+--         (raw byte, for threshold checks), connected / modelMismatch /
+--         criticalError (true/nil), warning (always a string, "" when the
+--         module sends none) -- or nil if the frame is shorter than the
+--         flags byte
+function CRSF:decodeElrsStatus(data)
+  if data[6] == nil then
+    return nil
+  end
+  local flags = data[6]
+  local warning = self:fieldGetString(data, 7)
+  return {
+    id = data[2],
+    lostPackets = data[3],
+    receivedPackets = data[4] * 256 + data[5],
+    flags = flags,
+    connected = bit32.btest(flags, 1) or nil,
+    modelMismatch = bit32.btest(flags, 4) or nil,
+    criticalError = (flags > CRSF.CONST.ELRS_FLAGS_WARNING_THRESHOLD) or nil,
+    warning = warning,
+  }
+end
+
+--- ELRS 1.x signature: an inbound PARAMETER_WRITE addressed to the official
+-- handset address from the TX module. 3.x+ answers on ADDRESS_HANDSET_ELRS and
+-- never writes to the handset. Reads data[1] (the destination) deliberately --
+-- unlike the decoders above, which leave gating on the source to the caller.
+-- @param data  array of byte values
+-- @return true when the frame matches the 1.x signature, nil otherwise
+function CRSF:isElrsV1Frame(data)
+  return (data[1] == CRSF.CONST.ADDRESS_HANDSET and data[2] == CRSF.CONST.ADDRESS_TX) or nil
+end
+
 --- Send a DEVICE_PING.
 -- A ping addressed to a specific device is answered on the handset UART and
 -- never forwarded over the air; a broadcast ping is also forwarded to the RX

@@ -34,6 +34,9 @@ local Protocol = {
   elrsV1Detected = false,
   receivedPackets = nil,
   lostPackets = nil,
+  connected = nil,
+  modelMismatch = nil,
+  criticalError = nil,
 
   -- Protocol timing
   linkstatTimeout = 100,
@@ -51,17 +54,17 @@ local Protocol = {
   hadTelemetry = false,
 }
 
--- Check if telemetry is being received from the RX (elrsFlags bit 1)
+-- Telemetry is being received from the RX (decoded ELRS status connected bit)
 function Protocol.hasTelemetry()
-  return bit32.btest(Protocol.elrsFlags, 1)
+  return Protocol.connected
 end
 
 function Protocol.isModelMismatch()
-  return bit32.btest(Protocol.elrsFlags, 0x04)
+  return Protocol.modelMismatch
 end
 
 function Protocol.hasCriticalError()
-  return Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD
+  return Protocol.criticalError
 end
 
 -- Response timeout for PARAMETER_READ:
@@ -82,6 +85,9 @@ function Protocol.setDevice(device)
 
   Protocol.deviceId = device.id
   Protocol.elrsFlags = 0
+  Protocol.connected = nil
+  Protocol.modelMismatch = nil
+  Protocol.criticalError = nil
   Protocol.deviceName = device.name
   Protocol.fieldsCount = device.fieldCount
   Protocol.deviceIsELRS_TX = device.isElrs and device.id == crsf.CONST.ADDRESS_TX or nil
@@ -504,17 +510,19 @@ Protocol.handlers = {
 -- ============================================================================
 
 function Protocol.parseDeviceInfoMessage(data)
-  local id = data[2]
-  local newName, offset = Protocol.fieldGetStrOrOpts(data, 3)
-  local device = Protocol.getDevice(id)
+  local info = crsf:decodeDeviceInfo(data)
+  if not info then
+    return nil
+  end
+  local device = Protocol.getDevice(info.id)
   local isNew = (device == nil)
   if isNew then
-    device = { id = id }
+    device = { id = info.id }
     Protocol.devices[#Protocol.devices + 1] = device
   end
-  device.name = newName
-  device.fieldCount = data[offset + 12]
-  device.isElrs = Protocol.fieldGetValue(data, offset, 4) == crsf.CONST.ELRS_SERIAL_ID
+  device.name = info.name
+  device.fieldCount = info.fieldCount
+  device.isElrs = info.isElrs
   return device, isNew
 end
 
@@ -598,24 +606,23 @@ function Protocol.parseParameterInfoMessage(data)
 end
 
 function Protocol.parseElrsInfoMessage(data)
-  if data[2] ~= Protocol.deviceId then
+  local status = crsf:decodeElrsStatus(data)
+  if not status then
+    return
+  end
+  if status.id ~= Protocol.deviceId then
     Protocol.fieldData = nil
     Protocol.fieldChunk = 0
     return
   end
 
-  Protocol.lostPackets = data[3]
-  Protocol.receivedPackets = (data[4] * 256) + data[5]
-  local newFlags = data[6]
-  Protocol.elrsFlags = newFlags
-  Protocol.elrsFlagsInfo = Protocol.fieldGetStrOrOpts(data, 7)
-end
-
-function Protocol.parseElrsV1Message(data)
-  if (data[1] ~= crsf.CONST.ADDRESS_HANDSET) or (data[2] ~= crsf.CONST.ADDRESS_TX) then
-    return
-  end
-  Protocol.elrsV1Detected = true
+  Protocol.lostPackets = status.lostPackets
+  Protocol.receivedPackets = status.receivedPackets
+  Protocol.elrsFlags = status.flags
+  Protocol.connected = status.connected
+  Protocol.modelMismatch = status.modelMismatch
+  Protocol.criticalError = status.criticalError
+  Protocol.elrsFlagsInfo = status.warning
 end
 
 -- ============================================================================
@@ -631,11 +638,13 @@ function Protocol.poll()
     command, data = crsf.pop()
     if command == crsf.CONST.FRAMETYPE_DEVICE_INFO then
       local device, isNew = Protocol.parseDeviceInfoMessage(data)
-      if device.id == Protocol.deviceId then
-        targetDevice = device
-      end
-      if isNew then
-        anyNewDevice = true
+      if device then
+        if device.id == Protocol.deviceId then
+          targetDevice = device
+        end
+        if isNew then
+          anyNewDevice = true
+        end
       end
     elseif command == crsf.CONST.FRAMETYPE_PARAMETER_SETTINGS_ENTRY then
       Protocol.parseParameterInfoMessage(data)
@@ -645,7 +654,9 @@ function Protocol.poll()
         Protocol.fieldTimeout = getTime() + Protocol.fieldPopup.timeout
       end
     elseif command == crsf.CONST.FRAMETYPE_PARAMETER_WRITE then
-      Protocol.parseElrsV1Message(data)
+      if crsf:isElrsV1Frame(data) then
+        Protocol.elrsV1Detected = true
+      end
     elseif command == crsf.CONST.FRAMETYPE_ELRS_STATUS then
       Protocol.parseElrsInfoMessage(data)
     end
@@ -679,7 +690,10 @@ function Protocol.tick()
     end
   elseif time > Protocol.linkstatTimeout then
     if Protocol.deviceIsELRS_TX then
-      crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, { Protocol.deviceId, Protocol.handsetId, 0x0, 0x0 })
+      -- deviceIsELRS_TX guarantees deviceId/handsetId are ADDRESS_TX and
+      -- ADDRESS_HANDSET_ELRS here (see setDevice), the addressing
+      -- requestElrsStatus() hardcodes.
+      crsf:requestElrsStatus()
     else
       Protocol.receivedPackets = nil
       Protocol.lostPackets = nil
