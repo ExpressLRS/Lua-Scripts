@@ -44,7 +44,8 @@ The tool builds on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 
 | Module | Purpose |
 |--------|---------|
-| `SCRIPTS/ELRS/crsf.lua` | CRSF constants, telemetry transport (`pop`/`push`), module detection, handler registry |
+| `SCRIPTS/ELRS/crsf.lua` | CRSF constants, telemetry transport (`pop`/`push`), module detection, handler registry, stateless frame decoders (`decodeDeviceInfo`, `decodeElrsStatus`, `isElrsV1Frame`) |
+| `SCRIPTS/ELRS/elrsinfo.lua` | Opt-in TX-module state: DEVICE_INFO cache, version-keyed RFMOD/RFRSSI tables, per-connection model-match latch. Loaded only by the telemetry widget |
 | `SCRIPTS/ELRS/shim.lua` | Polyfills for BW radios missing standard Lua functions |
 
 ## CRSF Simulator

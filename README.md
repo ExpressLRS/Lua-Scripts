@@ -19,6 +19,7 @@ When done, your SD card should contain:
 SCRIPTS/
   ELRS/
     crsf.lua                  -- shared CRSF protocol library
+    elrsinfo.lua              -- TX module info state (telemetry widget)
     shim.lua                  -- BW compatibility shim
   TOOLS/
     ExpressLRS/
