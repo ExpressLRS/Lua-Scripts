@@ -280,7 +280,8 @@ function CRSFSession:_onEntry(data)
   -- Entry complete: it settles the queue head only when it answers it -- a
   -- command status elicited while loads are pending must not pop an
   -- unrelated field
-  if self._loadQueue[#self._loadQueue] == fieldId then
+  local answeredHead = self._loadQueue[#self._loadQueue] == fieldId
+  if answeredHead then
     self._loadQueue[#self._loadQueue] = nil
   end
   if self._refreshId == fieldId then
@@ -297,9 +298,18 @@ function CRSFSession:_onEntry(data)
   -- track it across the decode.
   local wasHidden = field.hidden
   -- Passing the old name makes the decoder skip its read and reuse that
-  -- string, which is only safe while no reload has flagged the name as
-  -- possibly changed
-  local cachedName = (not field.nameStale and not field.reloading) and field.name or nil
+  -- string. In strict mode any name change is flagged first
+  -- (nameStale/reloading). A passive fan-out session also decodes entries
+  -- it never asked for, so no flag can cover a change -- but only folder
+  -- names embed values (ExpressLRS rewrites them on writes); every other
+  -- name is static, and caching it keeps the fan-out path cheap enough for
+  -- many sessions sharing one bus.
+  local cachedName
+  if not self._acceptUnsolicited then
+    cachedName = (not field.nameStale and not field.reloading) and field.name or nil
+  elseif field.type ~= crsf.CONST.FIELD_FOLDER then
+    cachedName = field.name
+  end
   if params.decodeEntry(field, fieldId, buffer, offset, cachedName) then
     field.nameStale = nil
     field.reloading = nil
@@ -317,8 +327,16 @@ function CRSFSession:_onEntry(data)
       self.command = nil
     end
 
-    -- Auto-queue children for the root folder and during preloading
-    if field.type == crsf.CONST.FIELD_FOLDER and field.children and (fieldId == 0 or self._preloading) then
+    -- Auto-queue children for the root folder and during preloading -- but
+    -- only off the answer to our own read: under the fan-out, sessions also
+    -- see every sibling's root answers, and re-queueing the children each
+    -- time would multiply the load traffic by the instance count
+    if
+      answeredHead
+      and field.type == crsf.CONST.FIELD_FOLDER
+      and field.children
+      and (fieldId == 0 or self._preloading)
+    then
       for i = #field.children, 1, -1 do
         self._loadQueue[#self._loadQueue + 1] = field.children[i]
       end

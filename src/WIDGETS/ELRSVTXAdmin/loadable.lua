@@ -9,7 +9,7 @@
 -- UI is loaded from a screen-specific file in ui/ based on LCD_W/LCD_H. --
 ---------------------------------------------------------------------------
 
-local zone, options, crsf, fields = ...
+local zone, options, crsf, CRSFSession = ...
 
 -- Forward declarations for modules (needed for cross-references)
 local VTX
@@ -137,8 +137,13 @@ function VTX.syncDesiredFromState()
 end
 
 -- ============================================================================
--- Protocol Module: CRSF config protocol, state machine, discovery, write queue
+-- Protocol Module: discovery state machine and write policy over a session
 -- ============================================================================
+
+-- Every widget instance owns a CRSF parameter session in passive fan-out
+-- mode: any field from the TX module is accepted, so sibling instances see
+-- every response they did not request themselves.
+local session
 
 Protocol = {
   -- State machine constants
@@ -153,34 +158,6 @@ Protocol = {
   -- Current state
   state = 0, -- STATE_INIT
   statusText = "Initializing...",
-
-  -- CRSF addressing plus the crsf_params.lua reassembly state the codec
-  -- manages (rx.chunk doubles as the next chunk index encodeRead carries,
-  -- giving multi-chunk entries their follow-up reads).
-  deviceId = crsf.CONST.ADDRESS_TX,
-  handsetId = crsf.CONST.ADDRESS_HANDSET_ELRS,
-  rx = { chunk = 0, expect = -1 },
-
-  -- Discovery
-  loadQueue = {},
-  rootChildren = {},
-  vtxChildren = {},
-  fieldTimeout = 0,
-  discoveredFields = {},
-
-  -- Write queue
-  writeQueue = {},
-  writeIdx = 0,
-  lastWriteTime = 0,
-
-  -- Folder re-read: event-driven, never periodic. armFolderRead() sets the
-  -- deadline after our own writes and on resume from suspension; the folder
-  -- response clears it, and an unanswered read retries a bounded number of
-  -- times so a lost frame cannot leave the display stale.
-  ---@type number?
-  folderReadPending = nil,
-  folderReadAttempts = 0,
-  FOLDER_READ_RETRIES = 3,
 
   -- Previous tick timestamp, to detect suspension: a standalone tool pauses
   -- widget scripts, and whatever it changed needs one read-back on resume.
@@ -207,89 +184,29 @@ function Protocol.hasModule()
   return Protocol.state ~= Protocol.STATE_NO_MODULE
 end
 
--- Response timeout for PARAMETER_READ: 0.5s for local TX module.
-function Protocol.fieldResponseTimeout()
-  return 50
-end
-
---- Arm a folder re-read `delay` ticks from now (0 = next tick).
---- Every push replaces one RC-channels frame on the handset->module UART, so
---- the folder is only ever read when something can have changed it: after our
---- own writes, and once on resume from suspension. Sibling widget instances
---- need nothing — every instance's onSettingsEntry sees every response.
-function Protocol.armFolderRead(delay)
-  Protocol.folderReadPending = getTime() + delay
-  Protocol.folderReadAttempts = 0
-  -- A fresh read must not inherit chunk state from an interrupted one (e.g.
-  -- resume from suspension mid-entry).
-  fields.resetChunks(Protocol.rx)
-end
-
 -- ============================================================================
--- Protocol: Response handler (registered on singleton dispatcher)
+-- Protocol: field handler (session onFieldUpdate callback)
 -- ============================================================================
 
-function Protocol.onSettingsEntry(data)
-  -- Passive fan-out mode: accept any field from our device (data[3] as the
-  -- expected id) -- sibling widget instances depend on seeing responses they
-  -- did not request. The codec gates on the device address and keeps
-  -- cross-field continuations out of an in-flight reassembly buffer.
-  local fieldId, buffer, offset = fields.reassemble(Protocol.rx, Protocol.deviceId, data, data[3])
-  if not fieldId then
-    return
-  end
-  if not buffer then
-    -- Chunk consumed: hurry the follow-up read, which carries the updated
-    -- chunk index. The device is answering, so no retry attempt is burned.
-    if Protocol.state >= Protocol.STATE_DISCOVER_ROOT and Protocol.state <= Protocol.STATE_DISCOVER_VTX then
-      Protocol.fieldTimeout = 0
-    elseif Protocol.folderReadPending then
-      Protocol.folderReadPending = getTime()
-      Protocol.folderReadAttempts = 0
-    end
-    return
-  end
-
-  local field = Protocol.discoveredFields[fieldId]
-  if not field then
-    field = {}
-    Protocol.discoveredFields[fieldId] = field
-  end
-  if not fields.decodeEntry(field, fieldId, buffer, offset) then
-    return
-  end
-  local fieldType = field.type
+function Protocol.onField(field)
+  local fieldId = field.id
   local fieldName = field.name
-
-  -- Pop the field from load queue if it matches
-  if #Protocol.loadQueue > 0 and Protocol.loadQueue[#Protocol.loadQueue] == fieldId then
-    Protocol.loadQueue[#Protocol.loadQueue] = nil
-    Protocol.fieldTimeout = 0
-  end
-
   local st = Protocol.state
 
   if st == Protocol.STATE_DISCOVER_ROOT then
-    if fieldId == 0 and fieldType == crsf.CONST.FIELD_FOLDER then
-      Protocol.rootChildren = field.children or {}
-      for i = #Protocol.rootChildren, 1, -1 do
-        Protocol.loadQueue[#Protocol.loadQueue + 1] = Protocol.rootChildren[i]
-      end
+    if fieldId == 0 and field.type == crsf.CONST.FIELD_FOLDER then
+      -- The session auto-queues the root children off this entry
       Protocol.state = Protocol.STATE_DISCOVER_CHILDREN
       Protocol.statusText = "Discovering fields..."
     end
   elseif st == Protocol.STATE_DISCOVER_CHILDREN then
-    if fieldType == crsf.CONST.FIELD_FOLDER and string.sub(fieldName, 1, 9) == "VTX Admin" then
+    if field.type == crsf.CONST.FIELD_FOLDER and string.sub(fieldName, 1, 9) == "VTX Admin" then
       VTX.ids.folder = fieldId
-      Protocol.vtxChildren = field.children or {}
       VTX.parseFolderName(fieldName)
-      for i = #Protocol.vtxChildren, 1, -1 do
-        Protocol.loadQueue[#Protocol.loadQueue + 1] = Protocol.vtxChildren[i]
-      end
+      session:loadFolder(fieldId)
       Protocol.state = Protocol.STATE_DISCOVER_VTX
       Protocol.statusText = "Loading VTX fields..."
-    end
-    if #Protocol.loadQueue == 0 and VTX.ids.folder == nil then
+    elseif not session:isLoading() and VTX.ids.folder == nil then
       Protocol.statusText = "VTX Admin not found"
     end
   elseif st == Protocol.STATE_DISCOVER_VTX then
@@ -305,7 +222,7 @@ function Protocol.onSettingsEntry(data)
       VTX.ids.send = fieldId
     end
 
-    if #Protocol.loadQueue == 0 then
+    if not session:isLoading() then
       if VTX.ids.band and VTX.ids.channel and VTX.ids.power and VTX.ids.pitmode and VTX.ids.send then
         Protocol.state = Protocol.STATE_READY
         Protocol.statusText = ""
@@ -316,14 +233,18 @@ function Protocol.onSettingsEntry(data)
     end
   elseif st == Protocol.STATE_READY then
     if fieldId == VTX.ids.folder then
-      Protocol.folderReadPending = nil
       VTX.parseFolderName(fieldName)
     end
   end
 end
 
--- Register on the shared CRSF singleton
-crsf:registerHandler(crsf.CONST.FRAMETYPE_PARAMETER_SETTINGS_ENTRY, Protocol.onSettingsEntry)
+session = CRSFSession.new({
+  acceptUnsolicited = true,
+  responseTimeout = 50, -- always the local TX module
+  onFieldUpdate = Protocol.onField,
+})
+-- Register on the shared CRSF singleton's fan-out
+session:attachBus()
 
 -- ============================================================================
 -- Protocol: State machine tick
@@ -334,9 +255,12 @@ function Protocol.tick()
 
   -- A tick gap over a second means the widget was suspended — a standalone
   -- tool had the screen and may have changed the module config — so read the
-  -- folder back once on resume.
+  -- folder back once on resume. The bounded refresh slot retries a lost
+  -- frame without ever polling: every push replaces one RC-channels frame
+  -- on the handset->module UART, so the folder is only read when something
+  -- can have changed it.
   if Protocol.lastTick > 0 and now - Protocol.lastTick > 100 and Protocol.state == Protocol.STATE_READY then
-    Protocol.armFolderRead(0)
+    session:refreshField(VTX.ids.folder, 0, 3)
   end
   Protocol.lastTick = now
 
@@ -346,51 +270,20 @@ function Protocol.tick()
     if crsf.hasCrsfModule() then
       Protocol.state = Protocol.STATE_DISCOVER_ROOT
       Protocol.statusText = "Discovering..."
-      Protocol.loadQueue = { 0 }
-      Protocol.fieldTimeout = 0
+      session:reloadAll()
     else
       Protocol.state = Protocol.STATE_NO_MODULE
       Protocol.statusText = "No CRSF module"
     end
-  elseif
-    st == Protocol.STATE_DISCOVER_ROOT
-    or st == Protocol.STATE_DISCOVER_CHILDREN
-    or st == Protocol.STATE_DISCOVER_VTX
-  then
-    if #Protocol.loadQueue > 0 and now >= Protocol.fieldTimeout then
-      local fieldId = Protocol.loadQueue[#Protocol.loadQueue]
-      crsf.push(fields.encodeRead(Protocol.rx, Protocol.deviceId, Protocol.handsetId, fieldId))
-      Protocol.fieldTimeout = now + Protocol.fieldResponseTimeout()
-    end
-  elseif st == Protocol.STATE_READY then
-    if Protocol.folderReadPending and now >= Protocol.folderReadPending then
-      if Protocol.folderReadAttempts < Protocol.FOLDER_READ_RETRIES then
-        Protocol.folderReadAttempts = Protocol.folderReadAttempts + 1
-        Protocol.folderReadPending = now + Protocol.fieldResponseTimeout()
-        crsf.push(fields.encodeRead(Protocol.rx, Protocol.deviceId, Protocol.handsetId, VTX.ids.folder))
-      else
-        Protocol.folderReadPending = nil
-      end
-    end
-  elseif st == Protocol.STATE_SENDING then
-    if Protocol.writeIdx <= #Protocol.writeQueue then
-      if now - Protocol.lastWriteTime >= 5 then -- 50ms
-        local entry = Protocol.writeQueue[Protocol.writeIdx]
-        print(table.concat({ "VTXAdmin: writing field=", entry.id, " val=", entry.value }))
-        crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, entry))
-        Protocol.lastWriteTime = now
-        Protocol.writeIdx = Protocol.writeIdx + 1
-      end
-    else
-      print(table.concat({ "VTXAdmin: write queue complete, ", #Protocol.writeQueue, " entries sent" }))
-      Protocol.writeQueue = {}
-      Protocol.writeIdx = 0
-      Protocol.state = Protocol.STATE_READY
-      -- Read the folder back ~100ms after the last write so the module has
-      -- applied the change; the simulator defers folder-name updates ~20ms.
-      Protocol.armFolderRead(10)
-    end
+  elseif st == Protocol.STATE_SENDING and not session:isWriting() then
+    print("VTXAdmin: write queue drained")
+    Protocol.state = Protocol.STATE_READY
+    -- Read the folder back ~100ms after the last write so the module has
+    -- applied the change; the simulator defers folder-name updates ~20ms.
+    session:refreshField(VTX.ids.folder, 10, 3)
   end
+
+  session:tick()
 end
 
 -- ============================================================================
@@ -407,7 +300,6 @@ function Protocol.writeConfig()
 
   local s = VTX.state
   local d = VTX.desired
-  Protocol.writeQueue = {}
 
   print(table.concat({
     "VTXAdmin: writeConfig() desired: band=",
@@ -430,46 +322,44 @@ function Protocol.writeConfig()
     tostring(s.pitmode),
   }))
 
+  local wrote = 0
   if d.band ~= s.band then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.band, value = d.band }
+    session:writeField({ id = VTX.ids.band, value = d.band })
+    wrote = wrote + 1
   end
   if d.channel ~= s.channel then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.channel, value = d.channel }
+    session:writeField({ id = VTX.ids.channel, value = d.channel })
+    wrote = wrote + 1
   end
   if d.power ~= s.power then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.power, value = d.power }
+    session:writeField({ id = VTX.ids.power, value = d.power })
+    wrote = wrote + 1
   end
 
   local desiredPit = d.pitmode
   local currentPit = s.pitmode and 1 or 0
   if desiredPit ~= currentPit then
-    Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.pitmode, value = desiredPit }
+    session:writeField({ id = VTX.ids.pitmode, value = desiredPit })
+    wrote = wrote + 1
   end
 
-  print(table.concat({ "VTXAdmin: write queue built, ", #Protocol.writeQueue, " field(s)" }))
+  print(table.concat({ "VTXAdmin: writeConfig() wrote ", wrote, " field(s)" }))
 
-  if #Protocol.writeQueue > 0 then
-    Protocol.writeIdx = 1
-    Protocol.lastWriteTime = 0
+  if wrote > 0 then
     Protocol.state = Protocol.STATE_SENDING
   end
 end
 
---- Append the "Send VTx" command to the write queue, pushing config to the VTX.
+--- Send the "Send VTx" command, pushing config to the VTX.
 function Protocol.pushToVtx()
   if not Protocol.isReady() and Protocol.state ~= Protocol.STATE_SENDING then
     print("VTXAdmin: pushToVtx() skipped - not ready")
     return
   end
 
-  print("VTXAdmin: pushToVtx() - queuing Send VTx command")
-  Protocol.writeQueue[#Protocol.writeQueue + 1] = { id = VTX.ids.send, value = crsf.CONST.CMD_CLICK }
-
-  if Protocol.state ~= Protocol.STATE_SENDING then
-    Protocol.writeIdx = 1
-    Protocol.lastWriteTime = 0
-    Protocol.state = Protocol.STATE_SENDING
-  end
+  print("VTXAdmin: pushToVtx() - sending Send VTx command")
+  session:writeField({ id = VTX.ids.send, value = crsf.CONST.CMD_CLICK })
+  Protocol.state = Protocol.STATE_SENDING
 end
 
 -- ============================================================================

@@ -16,14 +16,17 @@ local function create(zone, options)
     ---@diagnostic disable-next-line: need-check-nil
     _crsfSingleton = getCRSF()
   end
-  if not _crsfParamsSingleton then
+  if not _crsfSessionClass then
     local getParams = loadScript("/SCRIPTS/ELRS/crsf_params.lua")
     ---@diagnostic disable-next-line: need-check-nil
-    _crsfParamsSingleton = getParams(_crsfSingleton)
+    local params = getParams(_crsfSingleton)
+    local getSessionClass = loadScript("/SCRIPTS/ELRS/crsf_session.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    _crsfSessionClass = getSessionClass(_crsfSingleton, params)
   end
   local loadable = loadScript("/WIDGETS/" .. name .. "/loadable.lua")
   ---@diagnostic disable-next-line: need-check-nil
-  return loadable(zone, options, _crsfSingleton, _crsfParamsSingleton)
+  return loadable(zone, options, _crsfSingleton, _crsfSessionClass)
 end
 
 local function refresh(widget, event, touchState)
