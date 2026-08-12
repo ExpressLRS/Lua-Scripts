@@ -1,18 +1,19 @@
 ---------------------------------------------------------------------------
 -- ELRS TX Module Info                                                   --
 --                                                                       --
--- DEVICE_INFO cache (module name, RFMOD/RFRSSI lookup tables) and the   --
+-- Opt-in stateful companion to the CRSF singleton: DEVICE_INFO cache    --
+-- (module name, version-keyed RFMOD/RFRSSI lookup tables) and the       --
 -- per-connection model-match status, fed by frame handlers registered   --
--- on the shared CRSF singleton. Loaded once per Lua state by            --
--- ELRSTelemetry/main.lua and shared by every widget instance; widgets   --
--- that do not need this data never load it.                             --
+-- on the shared CRSF singleton. Loaded once per Lua state and shared by --
+-- every widget instance; widgets that do not need this data never load  --
+-- it, so they never pay for the tables.                                 --
 --                                                                       --
 -- update() is the per-tick pump: call it right after crsf:poll().       --
 ---------------------------------------------------------------------------
 
 local crsf = ...
 
-local TxInfo = {}
+local ElrsInfo = {}
 
 -- ============================================================================
 -- State
@@ -20,28 +21,33 @@ local TxInfo = {}
 
 -- Device info cache (populated by the DEVICE_INFO handler):
 -- name, isElrs, RFMOD, RFRSSI
-TxInfo.deviceInfo = {}
+ElrsInfo.deviceInfo = {}
 
 -- Model match comes from the ELRS_STATUS answer updateModelMatch() requests
 -- once per connection: a connect-time snapshot, fine for model match, which
 -- is decided at connect.
 ---@type boolean?
-TxInfo.modelMismatch = nil
+ElrsInfo.modelMismatch = nil
 
 -- Device info polling
-TxInfo._lastDevPoll = 0
+ElrsInfo._lastDevPoll = 0
 
 -- ELRS status polling
-TxInfo._lastStatusPoll = 0
+ElrsInfo._lastStatusPoll = 0
 
 -- Set once the current connection's ELRS_STATUS answer has arrived, so each
 -- connection is polled for model match at most once. Cleared with the rest of
 -- the per-connection state on any hasTelemetry edge in update().
 ---@type boolean?
-TxInfo._statusAnswered = nil
+ElrsInfo._statusAnswered = nil
 
 -- hasTelemetry as last seen by update(), to detect connection edges.
-TxInfo._wasConnected = false
+ElrsInfo._wasConnected = false
+
+-- Effective major version of the RFMOD/RFRSSI tables currently built. The
+-- only version datum kept, purely so selectRfTables() can skip rebuilds.
+---@type number?
+ElrsInfo._rfMaj = nil
 
 -- ============================================================================
 -- Helpers
@@ -64,14 +70,14 @@ end
 -- must ask themselves. Rate-limited to at most once per second, permanently
 -- quiet once answered.
 local function requestDeviceInfo()
-  if TxInfo.deviceInfo.name then
+  if ElrsInfo.deviceInfo.name then
     return
   end
   local now = getTime()
-  if now - TxInfo._lastDevPoll < 100 then
+  if now - ElrsInfo._lastDevPoll < 100 then
     return
   end
-  TxInfo._lastDevPoll = now
+  ElrsInfo._lastDevPoll = now
   crsf:pingDevices(crsf.CONST.ADDRESS_TX)
 end
 
@@ -87,7 +93,7 @@ local MODEL_MATCH_MIN_RSSI = -70
 -- a strong link, and only until the current connection's answer arrives.
 -- Retries at most once per second while unanswered.
 local function updateModelMatch()
-  if not (crsf.hasTelemetry and TxInfo.deviceInfo.isElrs) or TxInfo._statusAnswered then
+  if not (crsf.hasTelemetry and ElrsInfo.deviceInfo.isElrs) or ElrsInfo._statusAnswered then
     return
   end
   local rssi = getActiveRssi()
@@ -95,10 +101,10 @@ local function updateModelMatch()
     return
   end
   local now = getTime()
-  if now - TxInfo._lastStatusPoll < 100 then
+  if now - ElrsInfo._lastStatusPoll < 100 then
     return
   end
-  TxInfo._lastStatusPoll = now
+  ElrsInfo._lastStatusPoll = now
   crsf:requestElrsStatus()
 end
 
@@ -109,7 +115,7 @@ end
 -- poll via a late-arriving answer. poll() dispatches frames before it derives
 -- hasTelemetry, so a dying connection's ELRS_STATUS always lands before the
 -- edge is observed here.
-function TxInfo:update()
+function ElrsInfo:update()
   local connected = crsf.hasTelemetry
   if connected ~= self._wasConnected then
     self._wasConnected = connected
@@ -124,32 +130,25 @@ end
 -- Frame handlers
 -- ============================================================================
 
--- DEVICE_INFO handler: parses and caches module name and RFMOD/RFRSSI
-local function onDeviceInfo(data)
-  if data[2] ~= crsf.CONST.ADDRESS_TX then
+--- Install the RFMOD/RFRSSI lookup tables for an ELRS major version.
+-- The highest known version at or below vMaj wins, so newer firmware
+-- degrades to the newest known tables instead of losing its rate names.
+-- Rebuilt only when the effective version changes (first answer, module
+-- swap across reconnects), never per frame.
+local function selectRfTables(vMaj)
+  local effMaj
+  if vMaj >= 4 then
+    effMaj = 4
+  elseif vMaj == 3 then
+    effMaj = 3
+  end
+  if ElrsInfo._rfMaj == effMaj then
     return
   end
+  ElrsInfo._rfMaj = effMaj
 
-  local name, off = crsf:fieldGetString(data, 3)
-  -- off is the first byte after the name's null terminator:
-  -- serNo (4) + hwVer (4) + swVer (4), where swVer's low 3 bytes are maj.min.rev
-  local vMaj, vRev = data[off + 9], data[off + 11]
-  if not vRev then
-    return -- frame shorter than the layout; leave the cache so the ping retries
-  end
-
-  local info = TxInfo.deviceInfo
-  info.name = name
-
-  -- Serial number "ELRS" identifies an ExpressLRS module. Other CRSF modules
-  -- answer DEVICE_PING too, but only ELRS answers the fieldId=0 status request.
-  local serial = ((data[off] * 256 + data[off + 1]) * 256 + data[off + 2]) * 256 + data[off + 3]
-  if serial == crsf.CONST.ELRS_SERIAL_ID then
-    info.isElrs = true
-  end
-
-  -- RFMOD / RFRSSI lookup tables (version-dependent)
-  if vMaj == 4 then
+  local info = ElrsInfo.deviceInfo
+  if effMaj == 4 then
     -- selene: allow(mixed_table)
     info.RFMOD = {
       "25Hz",
@@ -218,7 +217,7 @@ local function onDeviceInfo(data)
       [101] = -112,
       [102] = -112,
     }
-  elseif vMaj == 3 then
+  elseif effMaj == 3 then
     info.RFMOD = {
       "",
       "25Hz",
@@ -263,19 +262,36 @@ local function onDeviceInfo(data)
       0,
       -101,
     }
+  else
+    info.RFMOD = nil
+    info.RFRSSI = nil
   end
+end
+
+-- DEVICE_INFO handler: caches module name/identity and selects the RF tables
+local function onDeviceInfo(data)
+  local info = crsf:decodeDeviceInfo(data)
+  if info == nil or info.id ~= crsf.CONST.ADDRESS_TX then
+    return -- short frame (the ping retries) or not the TX module
+  end
+  ElrsInfo.deviceInfo.name = info.name
+  ElrsInfo.deviceInfo.isElrs = info.isElrs
+  selectRfTables(info.vMaj)
 end
 
 -- ELRS_STATUS handler: latches the answer and updates modelMismatch
 local function onElrsStatus(data)
-  if data[2] ~= crsf.CONST.ADDRESS_TX then
+  local status = crsf:decodeElrsStatus(data)
+  if status == nil or status.id ~= crsf.CONST.ADDRESS_TX then
     return
   end
-
-  TxInfo._statusAnswered = true
-  TxInfo.modelMismatch = bit32.btest(data[6] or 0, 4) or nil
+  ElrsInfo._statusAnswered = true
+  ElrsInfo.modelMismatch = status.modelMismatch
 end
 
+-- Sole byte-level consumer of these frame types in this Lua state: the
+-- decoders consume string bytes in place, so a handler registered behind
+-- these would see decoded chars, not bytes.
 crsf:registerHandler(crsf.CONST.FRAMETYPE_DEVICE_INFO, onDeviceInfo)
 crsf:registerHandler(crsf.CONST.FRAMETYPE_ELRS_STATUS, onElrsStatus)
 
@@ -283,4 +299,4 @@ crsf:registerHandler(crsf.CONST.FRAMETYPE_ELRS_STATUS, onElrsStatus)
 -- Return singleton
 -- ============================================================================
 
-return TxInfo
+return ElrsInfo
