@@ -20,12 +20,12 @@ SCRIPTS/
   ELRS/
     crsf.lua                  -- shared CRSF protocol library
     crsf_params.lua           -- parameter codec (tool, VTX Admin)
+    crsf_session.lua          -- stateful parameter client (tool, VTX Admin)
     crsf_elrsinfo.lua         -- TX module info state (telemetry widget)
     shim.lua                  -- BW compatibility shim
   TOOLS/
     ExpressLRS/
       main.lua                -- entry point
-      protocol.lua            -- device discovery and field policy
       navigation.lua          -- folder navigation
       ui/
         lvgl.lua              -- color LCD UI (LVGL)

@@ -34,8 +34,7 @@ Run `make help` to list all targets. The Makefile groups them into three categor
 
 | Module | Purpose |
 |--------|---------|
-| `main.lua` | Entry point and run-loop orchestrator |
-| `protocol.lua` | Device discovery, load-queue and command-popup policy over the shared field engine |
+| `main.lua` | Entry point, run-loop orchestrator, and the App policy layer (device switching, folder-ready edges, the synthetic "Other Devices" row types) over a `crsf_session.lua` instance |
 | `navigation.lua` | Folder and device navigation stack |
 | `ui/lvgl.lua` | Color LCD interface (LVGL dialogs, command pages, warnings) |
 | `ui/lcd.lua` | BW LCD interface (text cursor, popups) |
@@ -46,6 +45,7 @@ The tool builds on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 |--------|---------|
 | `SCRIPTS/ELRS/crsf.lua` | CRSF constants, telemetry transport (`pop`/`push`), module detection, handler registry, stateless frame decoders (`decodeDeviceInfo`, `decodeElrsStatus`, `isElrsV1Frame`) |
 | `SCRIPTS/ELRS/crsf_params.lua` | Opt-in parameter codec: `PARAMETER_SETTINGS_ENTRY` chunk reassembly over a caller-owned rx table and per-type decode, plus encoders that return `PARAMETER_READ`/`WRITE`, command-step and suppress-critical-errors frames for the caller to push. Loaded by the tool and the VTX Admin widget |
+| `SCRIPTS/ELRS/crsf_session.lua` | Opt-in stateful parameter client (`CRSFSession.new`, multi-instance): field store, load queue and retry scheduler, paced write queue, command state machine, and optional device discovery, link status and ELRS 1.x detection. Loaded by the tool and the VTX Admin widget |
 | `SCRIPTS/ELRS/crsf_elrsinfo.lua` | Opt-in TX-module state: DEVICE_INFO cache, version-keyed RFMOD/RFRSSI tables, per-connection model-match latch. Loaded only by the telemetry widget |
 | `SCRIPTS/ELRS/shim.lua` | Polyfills for BW radios missing standard Lua functions |
 

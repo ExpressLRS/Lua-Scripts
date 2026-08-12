@@ -7,9 +7,8 @@ local deps = ...
 
 local App = deps.App
 local Navigation = deps.Navigation
-local Protocol = deps.Protocol
+local session = deps.session
 local crsf = deps.crsf
-local fields = deps.fields
 local VERSION = deps.VERSION
 
 -- ============================================================================
@@ -21,10 +20,13 @@ local UI = {
   uiBuilt = false,
   folderWasReady = false,
 
-  -- Warning/command state (LVGL-specific)
+  -- Warning/command state (LVGL-specific). cmdLastStatus remembers which
+  -- command status the current dialog was built for, so a status change
+  -- swaps the dialog exactly once.
   warningDismissedAt = nil,
   warningDialog = nil,
   commandDialog = nil,
+  cmdLastStatus = nil,
 }
 
 -- ============================================================================
@@ -514,9 +516,9 @@ function UI.handleBack()
   else
     local entry = App.goBack()
     if entry and entry.type == Navigation.TYPE_DEVICE and entry.prevDeviceId then
-      local prevDevice = Protocol.getDevice(entry.prevDeviceId)
+      local prevDevice = session:getDevice(entry.prevDeviceId)
       if prevDevice then
-        Protocol.setDevice(prevDevice)
+        session:setDevice(prevDevice)
       end
     end
     UI.invalidate()
@@ -528,39 +530,38 @@ end
 -- ============================================================================
 
 local function onCommandCancel()
-  Protocol.commandCancel()
+  session:cancelCommand()
   UI.commandDialog = nil
   UI.invalidate()
 end
 
 local function handleCommandPopup()
-  if not Protocol.fieldPopup then
+  local command = session.command
+  if not command then
     if UI.commandDialog then
       UI.commandDialog = nil
       UI.invalidate()
     end
+    UI.cmdLastStatus = nil
     return
   end
 
-  if Protocol.fieldPopup.status == crsf.CONST.CMD_ASKCONFIRM then
-    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= crsf.CONST.CMD_ASKCONFIRM then
-      local field = Protocol.fieldPopup
-      UI.commandDialog = CommandPage.showConfirm(field.name, function()
-        return field.info or ""
+  if command.status == crsf.CONST.CMD_ASKCONFIRM then
+    if not UI.commandDialog or UI.cmdLastStatus ~= crsf.CONST.CMD_ASKCONFIRM then
+      UI.commandDialog = CommandPage.showConfirm(command.name, function()
+        return command.info or ""
       end, function()
-        Protocol.commandConfirm()
+        session:confirmCommand()
       end, onCommandCancel)
     end
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
-  elseif Protocol.fieldPopup.status == crsf.CONST.CMD_EXECUTING then
-    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= crsf.CONST.CMD_EXECUTING then
-      local field = Protocol.fieldPopup
-      UI.commandDialog = CommandPage.showExecuting(field.name, function()
-        return field.info or ""
+  elseif command.status == crsf.CONST.CMD_EXECUTING then
+    if not UI.commandDialog or UI.cmdLastStatus ~= crsf.CONST.CMD_EXECUTING then
+      UI.commandDialog = CommandPage.showExecuting(command.name, function()
+        return command.info or ""
       end, onCommandCancel)
     end
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
   end
+  UI.cmdLastStatus = command.status
 end
 
 -- ============================================================================
@@ -571,19 +572,19 @@ local function handleWarning()
   if App.shouldExit then
     return
   end
-  if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK then
+  if session.status.flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK then
     if not UI.warningDialog and not UI.warningDismissedAt then
-      if Protocol.modelMismatch then
+      if session.status.modelMismatch then
         UI.warningDialog = ModelMismatchDialog.show(function()
           UI.warningDismissedAt = getTime()
           UI.invalidate()
         end, function()
           App.shouldExit = true
         end)
-      elseif Protocol.criticalError then
+      elseif session.status.criticalError then
         Dialogs.showMessage({
           title = "Warning",
-          message = Protocol.elrsFlagsInfo,
+          message = session.status.warning,
         })
         UI.warningDialog = true
         UI.warningDismissedAt = getTime()
@@ -611,7 +612,7 @@ function UI.render(_event, _touchState)
   if not UI.commandDialog then
     handleWarning()
 
-    if not UI.uiBuilt and #Protocol.fields > 0 then
+    if not UI.uiBuilt and session.fieldsCount > 0 then
       UI.build()
     end
   end
@@ -626,7 +627,7 @@ function UI.getSubtitle()
     local top = Navigation.stack[#Navigation.stack]
     local subtitleParts = { top.name or "" }
 
-    local loaded, total = Protocol.getFolderLoadProgress(Navigation.getCurrent())
+    local loaded, total = session:folderLoadProgress(Navigation.getCurrent())
     if loaded and loaded < total then
       subtitleParts[#subtitleParts + 1] = string.format(" • Loading %d%%", math.floor(loaded / total * 100))
     end
@@ -634,26 +635,23 @@ function UI.getSubtitle()
     return table.concat(subtitleParts)
   end
 
-  local loaded, total = Protocol.getFolderLoadProgress(nil)
-  if loaded and loaded < total and Protocol.fieldsCount > 0 then
+  local loaded, total = session:folderLoadProgress(nil)
+  if loaded and loaded < total and session.fieldsCount > 0 then
     return string.format("Loading %d%%", math.floor(loaded / total * 100))
   end
 
+  local status = session.status
   local subtitle = ""
-  if Protocol.receivedPackets then
-    local state = Protocol.connected and "Telemetry OK" or "No telemetry"
-    subtitle = string.format("%u/%u • %s", Protocol.lostPackets, Protocol.receivedPackets, state)
+  if status.receivedPackets then
+    local state = status.connected and "Telemetry OK" or "No telemetry"
+    subtitle = string.format("%u/%u • %s", status.lostPackets, status.receivedPackets, state)
   end
 
-  if
-    Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK
-    and Protocol.elrsFlagsInfo
-    and Protocol.elrsFlagsInfo ~= ""
-  then
+  if status.flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and status.warning and status.warning ~= "" then
     if subtitle ~= "" then
-      subtitle = table.concat({ subtitle, " • ", Protocol.elrsFlagsInfo })
+      subtitle = table.concat({ subtitle, " • ", status.warning })
     else
-      subtitle = Protocol.elrsFlagsInfo
+      subtitle = status.warning
     end
   end
 
@@ -701,8 +699,7 @@ function UI.createToggleRow(pg, field)
             end,
             set = function(val)
               field.value = val
-              crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
-              Protocol.reloadRelatedFields(field)
+              session:writeField(field)
             end,
             active = function()
               return not field.disabled
@@ -766,8 +763,7 @@ function UI.createChoiceRow(pg, field)
     end,
     set = function(val)
       field.value = val - 1
-      crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
-      Protocol.reloadRelatedFields(field)
+      session:writeField(field)
     end,
     active = function()
       return not field.disabled
@@ -805,8 +801,7 @@ function UI.createNumberRow(pg, field)
     end,
     edited = function(val)
       field.value = val
-      crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
-      Protocol.reloadRelatedFields(field)
+      session:writeField(field)
     end,
     display = function(val)
       if isFloat then
@@ -901,8 +896,7 @@ function UI.createStringRow(pg, field)
           length = math.min(math.max(field.maxlen or 32, 32), 128),
           set = function(val)
             field.value = val
-            crsf.push(fields.encodeWriteString(Protocol.deviceId, Protocol.handsetId, field))
-            Protocol.reloadRelatedFields(field)
+            session:writeField(field)
           end,
           active = function()
             return not field.disabled
@@ -945,7 +939,7 @@ function UI.createCommandWidget(pg, field)
     end,
     w = lvgl.PERCENT_SIZE + 99,
     press = function()
-      Protocol.handleCommandSave(field)
+      session:execCommand(field)
     end,
   })
 end
@@ -1020,8 +1014,8 @@ function UI.build()
       flexPad = lvgl.PAD_SMALL,
       borderPad = lvgl.PAD_TINY,
     })
-    for _, device in ipairs(Protocol.devices) do
-      if device.id ~= Protocol.deviceId then
+    for _, device in ipairs(session.devices) do
+      if device.id ~= session.deviceId then
         devicesBox:button({
           text = device.name or "Unknown",
           w = lvgl.PERCENT_SIZE + 100,
@@ -1032,10 +1026,10 @@ function UI.build()
       end
     end
   else
-    local fieldsInFolder = Protocol.getFieldsInFolder(currentFolder)
+    local fieldsInFolder = session:fieldsInFolder(currentFolder)
 
     if currentFolder == nil then
-      UI.createInfoRow(fieldContainer, { name = "Device name", value = Protocol.deviceName or "Searching..." })
+      UI.createInfoRow(fieldContainer, { name = "Device name", value = session.deviceName or "Searching..." })
     end
 
     local FOLDERS_PER_ROW = 2
@@ -1085,11 +1079,11 @@ function UI.build()
       end
     end
 
-    if currentFolder == nil and Protocol.deviceIsELRS_TX then
+    if currentFolder == nil and session.isElrsTx then
       UI.createInfoRow(fieldContainer, { name = "Lua script version", value = VERSION })
     end
 
-    if currentFolder == nil and #Protocol.devices > 1 and not Navigation.hasDeviceEntry() then
+    if currentFolder == nil and #session.devices > 1 and not Navigation.hasDeviceEntry() then
       local wrapper = fieldContainer:box({
         w = lvgl.PERCENT_SIZE + 100,
         flexFlow = lvgl.FLOW_COLUMN,

@@ -7,9 +7,8 @@ local deps = ...
 
 local App = deps.App
 local Navigation = deps.Navigation
-local Protocol = deps.Protocol
+local session = deps.session
 local crsf = deps.crsf
-local fields = deps.fields
 local VERSION = deps.VERSION
 
 local versionCheckResult = nil
@@ -162,7 +161,7 @@ function UI.render(event, _touchState)
   -- Warning flashing timer
   local time = getTime()
   if time > UI.titleShowWarnTimeout then
-    UI.titleShowWarn = (Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
+    UI.titleShowWarn = (session.status.flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
     UI.titleShowWarnTimeout = time + 100
     UI.forceRedraw = true
   end
@@ -173,7 +172,7 @@ function UI.render(event, _touchState)
   end
 
   -- Model mismatch alert (full-screen, blocks normal rendering)
-  if Protocol.modelMismatch and not UI.warningDismissedAt then
+  if session.status.modelMismatch and not UI.warningDismissedAt then
     if event == EVT_VIRTUAL_ENTER then
       UI.warningDismissedAt = getTime()
       UI.forceRedraw = true
@@ -195,14 +194,14 @@ function UI.render(event, _touchState)
   -- more on the frame it empties. poll() pops the last entry before we get here,
   -- so without the trailing edge the response that completes a reload never
   -- reaches the screen and the page waits for the next event or warn tick.
-  local loading = #Protocol.loadQueue > 0
+  local loading = session:isLoading()
   if loading or UI.wasLoading then
     UI.forceRedraw = true
   end
   UI.wasLoading = loading
 
   -- Render: command popup or normal page
-  if Protocol.fieldPopup ~= nil then
+  if session.command ~= nil then
     UI.drawPopup(event)
   elseif event ~= 0 or UI.forceRedraw or UI.edit then
     UI.drawPage(event)
@@ -262,9 +261,9 @@ function UI.handleBack()
       UI.lineIndex = entry.li or 1
       UI.pageOffset = entry.po or 0
       if entry.type == Navigation.TYPE_DEVICE and entry.prevDeviceId then
-        local prevDevice = Protocol.getDevice(entry.prevDeviceId)
+        local prevDevice = session:getDevice(entry.prevDeviceId)
         if prevDevice then
-          Protocol.setDevice(prevDevice)
+          session:setDevice(prevDevice)
         end
       end
     end
@@ -281,21 +280,21 @@ function UI.buildVisibleFields()
   local vf = {}
 
   if currentFolder == Navigation.FOLDER_OTHER_DEVICES then
-    for _, device in ipairs(Protocol.devices) do
-      if device.id ~= Protocol.deviceId then
-        vf[#vf + 1] = { id = device.id, name = device.name, type = Protocol.DEVICE }
+    for _, device in ipairs(session.devices) do
+      if device.id ~= session.deviceId then
+        vf[#vf + 1] = { id = device.id, name = device.name, type = App.DEVICE }
       end
     end
   else
-    local fields = Protocol.getFieldsInFolder(currentFolder)
+    local fields = session:fieldsInFolder(currentFolder)
     for _, field in ipairs(fields) do
       if not field.hidden then
         vf[#vf + 1] = field
       end
     end
 
-    if currentFolder == nil and #Protocol.devices > 1 and not Navigation.hasDeviceEntry() then
-      vf[#vf + 1] = { name = "Other Devices", type = Protocol.DEVICE_FOLDER }
+    if currentFolder == nil and #session.devices > 1 and not Navigation.hasDeviceEntry() then
+      vf[#vf + 1] = { name = "Other Devices", type = App.DEVICE_FOLDER }
     end
   end
 
@@ -438,8 +437,8 @@ displayHandlers[crsf.CONST.FIELD_STRING] = fieldStringDisplay
 displayHandlers[crsf.CONST.FIELD_INFO] = fieldStringDisplay
 displayHandlers[crsf.CONST.FIELD_FOLDER] = fieldFolderDisplay
 displayHandlers[crsf.CONST.FIELD_COMMAND] = fieldCommandDisplay
-displayHandlers[Protocol.DEVICE] = fieldCommandDisplay
-displayHandlers[Protocol.DEVICE_FOLDER] = fieldFolderDisplay
+displayHandlers[App.DEVICE] = fieldCommandDisplay
+displayHandlers[App.DEVICE_FOLDER] = fieldFolderDisplay
 
 -- ============================================================================
 -- Title bar drawing
@@ -448,12 +447,13 @@ displayHandlers[Protocol.DEVICE_FOLDER] = fieldFolderDisplay
 function UI.drawTitle()
   local barHeight = 9
   local goodBadPkt = ""
-  if Protocol.receivedPackets then
-    local state = Protocol.connected and "C" or "-"
-    goodBadPkt = string.format("%u/%u   %s", Protocol.lostPackets, Protocol.receivedPackets, state)
+  local status = session.status
+  if status.receivedPackets then
+    local state = status.connected and "C" or "-"
+    goodBadPkt = string.format("%u/%u   %s", status.lostPackets, status.receivedPackets, state)
   end
 
-  local loaded, total = Protocol.getFolderLoadProgress(Navigation.getCurrent())
+  local loaded, total = session:folderLoadProgress(Navigation.getCurrent())
   if not UI.titleShowWarn then
     lcd.drawText(LCD_W - 1, 1, goodBadPkt, RIGHT)
     lcd.drawLine(LCD_W - 10, 0, LCD_W - 10, barHeight - 1, SOLID, INVERS)
@@ -465,9 +465,9 @@ function UI.drawTitle()
   else
     lcd.drawFilledRectangle(0, 0, LCD_W, barHeight, GREY_DEFAULT)
     if UI.titleShowWarn then
-      lcd.drawText(UI.COL1, 1, Protocol.elrsFlagsInfo, INVERS)
+      lcd.drawText(UI.COL1, 1, session.status.warning, INVERS)
     else
-      lcd.drawText(UI.COL1, 1, Protocol.deviceName or "Searching...", INVERS)
+      lcd.drawText(UI.COL1, 1, session.deviceName or "Searching...", INVERS)
     end
   end
 end
@@ -478,7 +478,7 @@ end
 
 function UI.drawWarning()
   lcd.drawText(UI.COL1, UI.textSize * 2, "Error:")
-  lcd.drawText(UI.COL1, UI.textSize * 3, Protocol.elrsFlagsInfo)
+  lcd.drawText(UI.COL1, UI.textSize * 3, session.status.warning)
   lcd.drawText(LCD_W / 2, UI.textSize * 5, "[OK]", BLINK + INVERS + CENTER)
 end
 
@@ -492,14 +492,14 @@ function UI.handleEvent(event)
       UI.edit = nil
       local field = UI.getField(UI.lineIndex)
       if field and field.id then
-        Protocol.reloadCurField(field)
+        session:reloadField(field)
       end
     else
       UI.handleBack()
     end
   elseif event == EVT_VIRTUAL_ENTER then
-    if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
-      Protocol.suppressCriticalErrors()
+    if session.status.flags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
+      session:suppressCriticalErrors()
     elseif UI.isOnBackExit() then
       if Navigation.isAtRoot() then
         App.shouldExit = true
@@ -513,17 +513,16 @@ function UI.handleEvent(event)
 
         if ft == crsf.CONST.FIELD_FOLDER then
           UI.openFolder(field.id, field.name)
-        elseif ft == Protocol.DEVICE_FOLDER then
+        elseif ft == App.DEVICE_FOLDER then
           UI.openFolder(Navigation.FOLDER_OTHER_DEVICES, "Other Devices")
-        elseif ft == Protocol.DEVICE then
+        elseif ft == App.DEVICE then
           UI.switchDevice(field.id)
         elseif ft == crsf.CONST.FIELD_COMMAND then
-          Protocol.handleCommandSave(field)
+          session:execCommand(field)
         elseif not field.disabled and ft <= crsf.CONST.FIELD_TEXT_SELECTION then
           UI.edit = not UI.edit
           if not UI.edit then
-            crsf.push(fields.encodeWriteInt(Protocol.deviceId, Protocol.handsetId, field))
-            Protocol.reloadRelatedFields(field)
+            session:writeField(field)
           end
         end
       end
@@ -553,7 +552,7 @@ function UI.drawPage(event)
   lcd.clear()
   UI.drawTitle()
 
-  if Protocol.elrsFlags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
+  if session.status.flags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
     UI.drawWarning()
   else
     local totalCount = UI.getSelectableCount()
@@ -590,39 +589,35 @@ end
 -- ============================================================================
 
 function UI.drawPopup(event)
+  local command = session.command
   if event == EVT_VIRTUAL_EXIT then
-    local status = Protocol.fieldPopup.status
+    local status = command.status
     if status ~= crsf.CONST.CMD_ASKCONFIRM and status ~= crsf.CONST.CMD_EXECUTING then
       -- No dialog is on screen yet (e.g. CMD_CLICK just went out): request the
       -- cancel but keep the popup up until the device reports CMD_IDLE. The
       -- dialog branches below handle their own cancel via popupConfirmation.
-      Protocol.commandRequestCancel()
+      session:requestCancelCommand()
     end
   end
 
-  if Protocol.fieldPopup.status == crsf.CONST.CMD_ASKCONFIRM then
-    local result = popupConfirmation(Protocol.fieldPopup.info or "", "PRESS [OK] to confirm", event)
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
+  if command.status == crsf.CONST.CMD_ASKCONFIRM then
+    local result = popupConfirmation(command.info or "", "PRESS [OK] to confirm", event)
     if result == "OK" then
-      Protocol.commandConfirm()
+      session:confirmCommand()
     elseif result == "CANCEL" then
-      Protocol.commandCancel()
+      session:cancelCommand()
     end
-  elseif Protocol.fieldPopup.status == crsf.CONST.CMD_EXECUTING then
-    if Protocol.rx.chunk == 0 then
+  elseif command.status == crsf.CONST.CMD_EXECUTING then
+    if not session:isReceivingChunks() then
       UI.commandRunningIndicator = (UI.commandRunningIndicator % 4) + 1
     end
     local result = popupConfirmation(
-      (Protocol.fieldPopup.info or "")
-        .. " ["
-        .. string.sub("|/-\\", UI.commandRunningIndicator, UI.commandRunningIndicator)
-        .. "]",
+      (command.info or "") .. " [" .. string.sub("|/-\\", UI.commandRunningIndicator, UI.commandRunningIndicator) .. "]",
       "Press [RTN] to exit",
       event
     )
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
     if result == "CANCEL" then
-      Protocol.commandCancel()
+      session:cancelCommand()
     end
   end
 end
