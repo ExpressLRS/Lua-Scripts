@@ -16,9 +16,14 @@ local function create(zone, options)
     ---@diagnostic disable-next-line: need-check-nil
     _crsfSingleton = getCRSF()
   end
+  if not _elrsTxInfoSingleton then
+    local getTxInfo = loadScript("/WIDGETS/" .. name .. "/txinfo.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    _elrsTxInfoSingleton = getTxInfo(_crsfSingleton)
+  end
   local loadable = loadScript("/WIDGETS/" .. name .. "/loadable.lua")
   ---@diagnostic disable-next-line: need-check-nil
-  return loadable(zone, options, _crsfSingleton)
+  return loadable(zone, options, _crsfSingleton, _elrsTxInfoSingleton)
 end
 
 local function refresh(widget, event, touchState)

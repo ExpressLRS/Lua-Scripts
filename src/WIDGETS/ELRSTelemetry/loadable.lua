@@ -3,12 +3,12 @@
 -- Loaded via loadScript() from ELRSTelemetry/main.lua                  --
 --                                                                      --
 -- Displays ELRS link telemetry using LVGL. Uses the shared CRSF        --
--- singleton passed from main.lua for device info discovery.             --
+-- singleton for transport and txinfo.lua for device info/model match.  --
 --                                                                      --
 -- UI is loaded from a screen-specific file in ui/ based on LCD_W/LCD_H.--
 ---------------------------------------------------------------------------
 
-local zone, options, crsf = ...
+local zone, options, crsf, txinfo = ...
 
 -- Forward declarations for modules
 local Telemetry
@@ -91,7 +91,7 @@ end
 --- modelMismatch arrives in the same ELRS_STATUS frame as hasTelemetry, so it only means
 --- anything while connected: ungated, a stale flag paints a label RED under text reading "--".
 function Telemetry.isMismatch()
-  return crsf.hasTelemetry and crsf.modelMismatch
+  return crsf.hasTelemetry and txinfo.modelMismatch
 end
 
 --- Short status text when not operational or warning active.
@@ -104,7 +104,7 @@ function Telemetry.statusText()
   if not crsf.hasTelemetry then
     return "No telemetry"
   end
-  if crsf.modelMismatch then
+  if txinfo.modelMismatch then
     return "Model Mismatch"
   end
   return nil
@@ -112,7 +112,7 @@ end
 
 --- Compute smoothed range percentage from RSSI.
 function Telemetry.getRangePct(tlm)
-  local mod = crsf.deviceInfo
+  local mod = txinfo.deviceInfo
   local rssi = (tlm.ant == 1) and tlm.rssi2 or tlm.rssi1
   if rssi == nil then
     return 0
@@ -137,7 +137,7 @@ function Telemetry.getRfModeStr(rfmd)
   if not crsf.hasTelemetry or rfmd == nil then
     return ""
   end
-  local mod = crsf.deviceInfo
+  local mod = txinfo.deviceInfo
   return (mod.RFMOD and mod.RFMOD[rfmd + 1]) or table.concat({ "RFMD", tostring(rfmd) })
 end
 
@@ -458,7 +458,7 @@ local function buildFullScreen()
       if not crsf.hasTelemetry then
         return "No telemetry"
       end
-      if crsf.modelMismatch then
+      if txinfo.modelMismatch then
         return "Model Mismatch"
       end
       return "Telemetry"
@@ -670,8 +670,7 @@ local wgt = {
 
 function wgt.background()
   crsf:poll()
-  crsf:requestDeviceInfo()
-  crsf:updateModelMatch()
+  txinfo:update()
   Telemetry.update()
 end
 

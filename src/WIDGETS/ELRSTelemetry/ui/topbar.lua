@@ -39,7 +39,7 @@ function TopBarUI.build(w, h)
             if not crsf.hasTelemetry then
               return "--"
             end
-            if crsf.modelMismatch then
+            if Telemetry.isMismatch() then
               return "Model"
             end
             return table.concat({ "LQ ", tostring(Telemetry.link.rqly or 0), "%" })
@@ -54,7 +54,7 @@ function TopBarUI.build(w, h)
             if not crsf.hasTelemetry then
               return "--"
             end
-            if crsf.modelMismatch then
+            if Telemetry.isMismatch() then
               return "Mismatch"
             end
             local rssi = Telemetry.getRssi(Telemetry.link)
