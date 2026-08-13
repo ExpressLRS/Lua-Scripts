@@ -9,9 +9,10 @@
 -- widgets never pay for it. Policy -- load queues, command popups,      --
 -- reload decisions, transport -- stays with the caller.                 --
 --                                                                       --
--- Purity rule: nothing in this file mutates a frame data table.         --
--- crsf:poll() hands the same table to every registered handler, so an   --
--- in-place decode here would corrupt the frame for sibling handlers.    --
+-- Purity rule: nothing in this file mutates a frame data table. The     --
+-- single-frame fast path in reassemble() hands the caller's frame back  --
+-- as the decode buffer, and decodeEntry may scan it more than once      --
+-- (cached-name skip), so decoding must stay read-only.                  --
 --                                                                       --
 -- Loaded via loadScript("/SCRIPTS/ELRS/crsf_params.lua")(crsf).         --
 -- Returns the codec table directly.                                     --
@@ -40,48 +41,83 @@ function Params.readValue(data, offset, size)
   return result
 end
 
---- Read a null-terminated string, or a semicolon-separated option list, from
--- a byte array without mutating it. Translates the legacy ELRS arrow bytes
--- (0xC0/0xC1) to the EdgeTX CHAR_UP/CHAR_DOWN glyphs.
+--- Read a null-terminated string from a byte array without mutating it.
+-- Names, units and info strings never carry the legacy ELRS arrow bytes
+-- (the firmware emits them only inside selection options), so no glyph
+-- translation happens here.
 -- @param data    array of byte values
 -- @param offset  1-based start offset
 -- @param last    cached previous result: when given, decoding is skipped and
 --                it is returned as-is (the offset still advances past the
 --                terminator). Only safe while no reload has flagged the
 --                content as possibly changed.
--- @param isOpts  truthy to split on ';' and return a table of options
--- @return string|table result, number nextOffset, number optCount (count of
---         non-empty options; 0 when cached or not isOpts)
-function Params.readStringOrOpts(data, offset, last, isOpts)
-  local r = last or (isOpts and {})
-  local optParts = {}
-  local vcnt = 0
-  repeat
+-- @return string result (or last as-is), number nextOffset
+function Params.readString(data, offset, last)
+  if last then
     local b = data[offset]
-    offset = offset + 1
-
-    if not last then
-      if r and (b == 59 or b == 0) then
-        r[#r + 1] = shim.tableConcat(optParts)
-        if #optParts > 0 then
-          vcnt = vcnt + 1
-          optParts = {}
-        end
-      elseif b ~= 0 then
-        -- Translate legacy arrow bytes (0xC0/0xC1) from ELRS firmware
-        -- to EdgeTX CHAR_UP/CHAR_DOWN glyphs
-        if b == 192 and CHAR_UP then
-          optParts[#optParts + 1] = CHAR_UP
-        elseif b == 193 and CHAR_DOWN then
-          optParts[#optParts + 1] = CHAR_DOWN
-        else
-          optParts[#optParts + 1] = string.char(b)
-        end
-      end
+    while b and b ~= 0 do
+      offset = offset + 1
+      b = data[offset]
     end
-  until b == 0
+    return last, offset + 1
+  end
+  local parts = {}
+  local b = data[offset]
+  while b and b ~= 0 do
+    parts[#parts + 1] = string.char(b)
+    offset = offset + 1
+    b = data[offset]
+  end
+  return shim.tableConcat(parts), offset + 1
+end
 
-  return (r or shim.tableConcat(optParts)), offset, vcnt
+--- Read a null-terminated, semicolon-separated option list into the
+-- caller-owned values table, refilling it in place so its identity is
+-- stable for the field's lifetime. Empty options stay as "" entries (the
+-- UI disables those slots); leftover slots from a previously longer list
+-- are truncated. Translates the legacy ELRS arrow bytes (0xC0/0xC1) to the
+-- EdgeTX CHAR_UP/CHAR_DOWN glyphs.
+-- @param data    array of byte values
+-- @param offset  1-based start offset
+-- @param values  the caller-owned option table to refill
+-- @return number nextOffset, number optCount (count of non-empty options),
+--         boolean changed (any slot differs from the previous contents)
+function Params.readOptions(data, offset, values)
+  local n = 0
+  local vcnt = 0
+  local changed = false
+  local optParts = {}
+  local b = data[offset]
+  while b do
+    offset = offset + 1
+    if b == 59 or b == 0 then
+      local opt = shim.tableConcat(optParts)
+      n = n + 1
+      if values[n] ~= opt then
+        values[n] = opt
+        changed = true
+      end
+      if #optParts > 0 then
+        vcnt = vcnt + 1
+        optParts = {}
+      end
+      if b == 0 then
+        break
+      end
+    elseif b == 192 and CHAR_UP then
+      optParts[#optParts + 1] = CHAR_UP
+    elseif b == 193 and CHAR_DOWN then
+      optParts[#optParts + 1] = CHAR_DOWN
+    else
+      optParts[#optParts + 1] = string.char(b)
+    end
+    b = data[offset]
+  end
+  for i = #values, n + 1, -1 do
+    values[i] = nil
+    changed = true
+  end
+  return offset, vcnt, changed
 end
 
 -- ============================================================================
@@ -92,7 +128,7 @@ local function fieldUnsignedLoad(field, data, offset, size, unitoffset)
   field.value = Params.readValue(data, offset, size)
   field.min = Params.readValue(data, offset + size, size)
   field.max = Params.readValue(data, offset + 2 * size, size)
-  local unit = Params.readStringOrOpts(data, offset + (unitoffset or (4 * size)), field.unit)
+  local unit = Params.readString(data, offset + (unitoffset or (4 * size)), field.unit)
   field.unit = (unit ~= "") and unit or nil
   if size ~= 1 then
     field.size = size
@@ -129,34 +165,34 @@ local function fieldFloatLoad(field, data, offset)
 end
 
 local function fieldTextSelLoad(field, data, offset)
-  local vcnt
-  local oldValues = field.values
-  local cached = field.dirty == nil and oldValues
-  field.values, offset, vcnt = Params.readStringOrOpts(data, offset, cached, true)
-  if not cached then
+  local cached = field.dirty == nil and field.values or nil
+  if cached then
+    -- Options already decoded and not flagged dirty: skip the blob
+    cached, offset = Params.readString(data, offset, cached)
+  else
+    local values = field.values
+    if values == nil then
+      values = {}
+      field.values = values
+    end
+    local vcnt, changed
+    offset, vcnt, changed = Params.readOptions(data, offset, values)
     field.disabled = (vcnt <= 1) or nil
-    -- Preserve table identity if contents unchanged (avoids redundant Choice widget updates)
-    if oldValues and #oldValues == #field.values then
-      local same = true
-      for i = 1, #field.values do
-        if oldValues[i] ~= field.values[i] then
-          same = false
-          break
-        end
-      end
-      if same then
-        field.values = oldValues
-      end
+    if changed then
+      -- Consumers watch this revision instead of table identity: the values
+      -- table is refilled in place and keeps its identity for the field's
+      -- lifetime.
+      field.valuesRev = (field.valuesRev or 0) + 1
     end
   end
   field.value = data[offset]
-  local unit = Params.readStringOrOpts(data, offset + 4)
+  local unit = Params.readString(data, offset + 4)
   field.unit = (unit ~= "") and unit or nil
   field.dirty = nil
 end
 
 local function fieldStringLoad(field, data, offset)
-  field.value, offset = Params.readStringOrOpts(data, offset)
+  field.value, offset = Params.readString(data, offset)
   if #data >= offset then
     field.maxlen = data[offset]
   end
@@ -165,7 +201,7 @@ end
 local function fieldCommandLoad(field, data, offset)
   field.status = data[offset]
   field.timeout = data[offset + 1]
-  local info = Params.readStringOrOpts(data, offset + 2)
+  local info = Params.readString(data, offset + 2)
   field.info = (info ~= "") and info or nil
 end
 
@@ -218,10 +254,10 @@ end
 
 --- Feed one PARAMETER_SETTINGS_ENTRY frame into the reassembly.
 -- expectedFieldId selects the consumption model: a caller waiting on one
--- specific field passes its id (nil while idle drops everything), a caller
--- listening passively under the poll() fan-out passes data[3] to accept any
--- field from deviceId -- the dataId gate then keeps a sibling-elicited entry
--- for another field out of an in-flight buffer.
+-- specific field passes its id (nil while idle drops everything), a passive
+-- caller (acceptUnsolicited) passes data[3] to accept any field from
+-- deviceId -- the dataId gate then keeps a sibling-elicited entry for
+-- another field out of an in-flight buffer.
 -- Never mutates data, and never retains it: the single-frame fast path
 -- returns data itself as the buffer, valid only for the current call.
 -- @param rx               the reassembly-state table
@@ -313,7 +349,7 @@ end
 -- @param buffer      byte array holding the payload
 -- @param offset      1-based offset of the parent byte within buffer
 -- @param cachedName  pass the previous name to skip its decode (see
---                    readStringOrOpts); nil decodes it fresh
+--                    readString); nil decodes it fresh
 -- @return field, or nil when the entry is shorter than parent + type + one
 --         name byte (the caller should still drop it from its queue)
 function Params.decodeEntry(field, fieldId, buffer, offset, cachedName)
@@ -325,7 +361,7 @@ function Params.decodeEntry(field, fieldId, buffer, offset, cachedName)
   field.parent = (buffer[offset] ~= 0) and buffer[offset] or nil
   field.type = bit32.band(buffer[offset + 1], 0x7f)
   field.hidden = bit32.btest(buffer[offset + 1], 0x80) or nil
-  field.name, offset = Params.readStringOrOpts(buffer, offset + 2, cachedName)
+  field.name, offset = Params.readString(buffer, offset + 2, cachedName)
   local load = handlers[field.type + 1]
   if load then
     load(field, buffer, offset)

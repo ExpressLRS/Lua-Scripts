@@ -494,6 +494,14 @@ end
 -- ============================================================================
 
 function UI.openFolder(folderId, folderName)
+  -- The subtitle shows the folder name without the dynamic value suffix
+  -- ExpressLRS embeds in it (e.g. "VTX Admin (R:4:2:P)").
+  if folderName then
+    local par = string.find(folderName, " (", 1, true)
+    if par then
+      folderName = string.sub(folderName, 1, par - 1)
+    end
+  end
   App.enterFolder(folderId, folderName)
   UI.invalidate()
 end
@@ -725,7 +733,7 @@ function UI.createToggleRow(pg, field)
 end
 
 function UI.createChoiceRow(pg, field)
-  local valuesRef = field.values
+  local valuesRef = field.valuesRev
   local choiceWidget
 
   local setting = pg:setting({
@@ -735,8 +743,10 @@ function UI.createChoiceRow(pg, field)
       if field.hidden then
         return false
       end
-      if field.values ~= valuesRef then
-        valuesRef = field.values
+      -- The values table is refilled in place (identity is stable); the
+      -- codec bumps valuesRev when the contents change.
+      if field.valuesRev ~= valuesRef then
+        valuesRef = field.valuesRev
         if choiceWidget then
           choiceWidget:set({ values = field.values or {} })
         end

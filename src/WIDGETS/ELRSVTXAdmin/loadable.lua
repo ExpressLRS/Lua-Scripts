@@ -257,8 +257,6 @@ session = CRSFSession.new({
   responseTimeout = 50, -- always the local TX module
   onFieldUpdate = onField,
 })
--- Register on the shared CRSF singleton's fan-out
-session:attachBus()
 
 -- ============================================================================
 -- VTXAdmin: 6POS quick-change and push-trigger automation
@@ -567,7 +565,7 @@ local wgt = {
 }
 
 function wgt.background()
-  crsf:poll()
+  session:drain()
   VTXAdmin.tick()
 end
 

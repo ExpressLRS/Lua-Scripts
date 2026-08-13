@@ -15,10 +15,22 @@ local useLvgl = (lvgl ~= nil)
 -- Load shared modules
 -- ============================================================================
 
-local crsf = loadScript("/SCRIPTS/ELRS/crsf.lua")()
-local params = loadScript("/SCRIPTS/ELRS/crsf_params.lua")(crsf)
-local CRSFSession = loadScript("/SCRIPTS/ELRS/crsf_session.lua")(crsf, params)
-local Navigation = loadScript("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")()
+-- A full collection before each load frees the previous compile's parser
+-- scratch; the firmware runs no GC between loadScript calls, so on a fresh
+-- install (no .luac yet) the compile peaks would otherwise stack.
+local function loadPart(path, arg1, arg2)
+  collectgarbage("collect")
+  local chunk = loadScript(path)
+  if chunk == nil then
+    error(path)
+  end
+  return chunk(arg1, arg2)
+end
+
+local crsf = loadPart("/SCRIPTS/ELRS/crsf.lua")
+local params = loadPart("/SCRIPTS/ELRS/crsf_params.lua", crsf)
+local CRSFSession = loadPart("/SCRIPTS/ELRS/crsf_session.lua", crsf, params)
+local Navigation = loadPart("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")
 
 -- ============================================================================
 -- App Module: business logic between the session and the UI
@@ -84,7 +96,8 @@ function App.goBack()
   return Navigation.goBack()
 end
 
--- Reload at root: switch back to TX device or reload fields + ping.
+-- Reload at root: switch back to TX device or reload fields, then
+-- re-discover so new devices appear.
 function App.reloadAtRoot()
   if session.deviceId ~= crsf.CONST.ADDRESS_TX then
     local txDevice = session:getDevice(crsf.CONST.ADDRESS_TX)
@@ -94,7 +107,7 @@ function App.reloadAtRoot()
   else
     session:reloadAll()
   end
-  crsf:pingDevices()
+  session:discoverDevices()
 end
 
 -- ============================================================================
@@ -132,9 +145,9 @@ local function init()
     VERSION = VERSION,
   }
   if useLvgl then
-    UI = loadScript("/SCRIPTS/TOOLS/ExpressLRS/ui/lvgl.lua")(deps)
+    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRS/ui/lvgl.lua", deps)
   else
-    UI = loadScript("/SCRIPTS/TOOLS/ExpressLRS/ui/lcd.lua")(deps)
+    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRS/ui/lcd.lua", deps)
   end
   UI.init()
   -- The returned table stays on the standalone Lua stack and pins init(),

@@ -10,9 +10,8 @@
 -- ============================================================================
 
 -- B&W radios ship without the table library, so every table.* call here goes
--- through the shared ELRS compat layer. Loading this eagerly is safe: the ELRS
--- library is always installed, while this mock is dev-only.
-local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
+-- through the simulator's own compat layer.
+local shim = loadScript("/SCRIPTS/CRSFSimulator/shim.lua")()
 
 -- ============================================================================
 -- Configuration: Change scenario here to test different states
@@ -137,11 +136,22 @@ local pwmChannelConfig = {
 }
 
 -- ============================================================================
--- FIFO Packet Queue
+-- Packet delivery: a frame log with per-consumer cursors
+--
+-- Real firmware replicates every incoming frame into each widget instance's
+-- private queue, so every consumer sees every frame. The mock emulates that:
+-- frames append to a shared log, and each consumer (the identity passed to
+-- pop()) advances its own cursor over it. A new consumer starts at the
+-- current tail, matching the firmware's lazy queue creation. Each delivery
+-- hands out a fresh copy of the data table -- consumers decode in place,
+-- exactly as they may with the firmware's per-queue copies.
 -- ============================================================================
 
-local packetQueue = {}
-local queueHead = 1
+local frameLog = {}
+local logTotal = 0
+local logPruned = 0
+local cursors = setmetatable({}, { __mode = "k" })
+local defaultConsumer = {}
 
 -- Deferred packets simulate OTA relay delay (e.g., RX DEVICE_INFO arriving
 -- later than TX DEVICE_INFO). They are delivered in the NEXT poll cycle,
@@ -165,32 +175,63 @@ local FOLDER_NAMES_UPDATE_TICKS = 2 -- 20ms delay
 local folderNamesReadyAt = 0
 local folderNamesDevice = nil
 
+-- Drop log entries every cursor has passed
+local function pruneLog()
+  local minCursor = logTotal
+  for _, c in pairs(cursors) do
+    if c < minCursor then
+      minCursor = c
+    end
+  end
+  for i = logPruned + 1, minCursor do
+    frameLog[i] = nil
+  end
+  logPruned = minCursor
+end
+
 local function queuePush(command, data)
-  packetQueue[#packetQueue + 1] = { command = command, data = data }
+  logTotal = logTotal + 1
+  frameLog[logTotal] = { command = command, data = data }
+  pruneLog()
 end
 
 local function queuePushDeferred(command, data)
   deferredQueue[#deferredQueue + 1] = { command = command, data = data }
 end
 
-local function queuePop()
-  -- Serve from main queue first
-  if queueHead <= #packetQueue then
-    local pkt = packetQueue[queueHead]
-    queueHead = queueHead + 1
-    deferredReady = false
-    return pkt.command, pkt.data
+-- Deliver the frame at index to a consumer as a fresh data-table copy
+local function deliver(consumer, index)
+  cursors[consumer] = index
+  local pkt = frameLog[index]
+  local data = {}
+  for i = 1, #pkt.data do
+    data[i] = pkt.data[i]
+  end
+  return pkt.command, data
+end
+
+local function queuePop(consumer)
+  consumer = consumer or defaultConsumer
+  local cursor = cursors[consumer]
+  if cursor == nil then
+    cursor = logTotal
+    cursors[consumer] = cursor
   end
 
-  -- Main queue empty, reset it
-  packetQueue = {}
-  queueHead = 1
+  -- Serve the next unread log entry first
+  if cursor < logTotal then
+    deferredReady = false
+    return deliver(consumer, cursor + 1)
+  end
 
-  -- Serve deferred packets only after a nil has been returned (next poll cycle)
+  -- At the tail: serve deferred packets only after a nil has been returned
+  -- (next poll cycle). Promotion appends to the log, so every consumer
+  -- sees the deferred frame.
   if deferredReady and #deferredQueue > 0 then
     local pkt = shim.tableRemove(deferredQueue, 1)
     ---@diagnostic disable-next-line: need-check-nil
-    return pkt.command, pkt.data
+    queuePush(pkt.command, pkt.data)
+    return deliver(consumer, cursors[consumer] + 1)
   end
 
   -- Mark deferred as ready for the next poll cycle
@@ -1406,7 +1447,7 @@ end
 -- mockPop: Returns next queued packet or nil
 -- ============================================================================
 
-local function mockPop()
+local function mockPop(consumer)
   if not startTime then
     startTime = getTime()
   end
@@ -1424,7 +1465,7 @@ local function mockPop()
     end
   end
 
-  local command, data = queuePop()
+  local command, data = queuePop(consumer)
 
   -- Apply deferred folder name updates once enough real time has elapsed.
   -- Until then, any PARAMETER_READ for a folder returns the stale dynName.

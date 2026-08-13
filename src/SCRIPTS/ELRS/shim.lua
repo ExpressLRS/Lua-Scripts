@@ -1,8 +1,7 @@
 ---------------------------------------------------------------------------
 -- B&W Compatibility Layer                                               --
 --                                                                       --
--- Polyfills for standard Lua library functions missing on B&W radios    --
--- (table.concat, table.remove) and shared helpers (byte-array decoding). --
+-- Polyfill for table.concat, which is missing on B&W radios.            --
 --                                                                       --
 -- Lives in /SCRIPTS/ELRS/ alongside crsf.lua so it is available to     --
 -- both color widgets and B&W telemetry scripts.                         --
@@ -35,46 +34,6 @@ else
     end
     return r
   end
-end
-
--- ============================================================================
--- table.remove polyfill
--- Removes and returns the element at pos (default: last element).
--- Shifts subsequent elements down to close the gap.
--- ============================================================================
-
-if table and table.remove then
-  shim.tableRemove = table.remove
-else
-  shim.tableRemove = function(t, pos)
-    local n = #t
-    if n == 0 then
-      return nil
-    end
-    pos = pos or n
-    local val = t[pos]
-    for i = pos, n - 1 do
-      t[i] = t[i + 1]
-    end
-    t[n] = nil
-    return val
-  end
-end
-
--- ============================================================================
--- Byte array -> string
--- Stands in for string.char(table.unpack(t)), which needs the table library.
--- Deliberately iterative: a pure-Lua unpack has to recurse once per element
--- (and `return t[i], f(...)` is not a tail call, so it cannot be optimised
--- away), which is not something to hand EdgeTX's Lua stack.
--- ============================================================================
-
-function shim.charsToString(t, i, j)
-  local parts = {}
-  for k = i or 1, j or #t do
-    parts[#parts + 1] = string.char(t[k])
-  end
-  return shim.tableConcat(parts)
 end
 
 return shim

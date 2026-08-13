@@ -13,9 +13,9 @@
 -- widget instance each own one. Methods live on the shared metatable,   --
 -- so an instance costs one table plus its opts callbacks.               --
 --                                                                       --
--- Two receive models converge on _onFrame: a standalone tool drains     --
--- the destructive pop queue itself (drain()), widgets register on the   --
--- crsf.lua fan-out once (attachBus()) and crsf:poll() feeds them.       --
+-- Frames arrive through drain(): every consumer pops its own script     --
+-- instance's queue (the firmware replicates incoming frames per widget  --
+-- instance on color radios) and _onFrame routes them internally.        --
 --                                                                       --
 -- Loaded via loadScript("/SCRIPTS/ELRS/crsf_session.lua")(crsf,params). --
 -- Returns the CRSFSession class; construct with CRSFSession.new(opts).  --
@@ -148,39 +148,20 @@ function CRSFSession:setDevice(device)
   return true
 end
 
---- Drain the destructive pop queue into the session (pull model, for a
--- standalone tool that owns the queue). Widgets use attachBus() instead.
+--- Drain the destructive pop queue into the session: the one receive path
+-- for every consumer. The queue popped is the calling script instance's
+-- own, so a session drains exactly the frames delivered to its owner.
 function CRSFSession:drain()
-  local command, data
-  repeat
-    command, data = crsf.pop()
-    if command then
-      self:_onFrame(command, data)
-    end
-  until command == nil
+  crsf.drain(self, self._onFrame)
 end
 
---- Register the session's frame handlers on the crsf.lua fan-out (push
--- model, for widgets). Call once; crsf:poll() then feeds the session.
-function CRSFSession:attachBus()
-  crsf:registerHandler(crsf.CONST.FRAMETYPE_PARAMETER_SETTINGS_ENTRY, function(data)
-    self:_onEntry(data)
-  end)
-  if self._discovery then
-    crsf:registerHandler(crsf.CONST.FRAMETYPE_DEVICE_INFO, function(data)
-      self:_onDeviceInfo(data)
-    end)
-  end
-  if self._trackStatus then
-    crsf:registerHandler(crsf.CONST.FRAMETYPE_ELRS_STATUS, function(data)
-      self:_onStatus(data)
-    end)
-  end
-  if self._detectV1 then
-    crsf:registerHandler(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, function(data)
-      self:_onWrite(data)
-    end)
-  end
+--- Ask every reachable device to announce itself (broadcast DEVICE_PING).
+-- Answers land in .devices through the discovery routing, so this is the
+-- policy-facing "refresh the device list now" -- the scheduler's own
+-- cadence only pings while the list is still empty. Meaningful only with
+-- opts.discovery.
+function CRSFSession:discoverDevices()
+  crsf:pingDevices()
 end
 
 -- ============================================================================
@@ -364,11 +345,6 @@ end
 -- Store queries
 -- ============================================================================
 
---- The field table for an id, or nil while it is unknown.
-function CRSFSession:field(id)
-  return self._fields[id]
-end
-
 --- The device table for an address, or nil (opts.discovery fills .devices).
 function CRSFSession:getDevice(id)
   for _, device in ipairs(self.devices) do
@@ -435,11 +411,6 @@ end
 --- True while a multi-chunk entry is mid-reassembly.
 function CRSFSession:isReceivingChunks()
   return self.rx.chunk > 0
-end
-
---- True while background preloading (opts.preload) is filling the store.
-function CRSFSession:isPreloading()
-  return self._preloading ~= nil
 end
 
 --- True while writes are waiting in the paced write queue.

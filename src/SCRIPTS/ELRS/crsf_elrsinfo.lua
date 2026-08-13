@@ -3,12 +3,13 @@
 --                                                                       --
 -- Opt-in stateful companion to the CRSF singleton: DEVICE_INFO cache    --
 -- (module name, version-keyed RFMOD/RFRSSI lookup tables) and the       --
--- per-connection model-match status, fed by frame handlers registered   --
--- on the shared CRSF singleton. Loaded once per Lua state and shared by --
--- every widget instance; widgets that do not need this data never load  --
--- it, so they never pay for the tables.                                 --
+-- per-connection model-match status, fed by drain(). Loaded once per    --
+-- Lua state and shared by every widget instance; widgets that do not    --
+-- need this data never load it, so they never pay for the tables.       --
 --                                                                       --
--- update() is the per-tick pump: call it right after crsf:poll().       --
+-- Per background tick: elrsinfo:drain() to ingest the queue (which also --
+-- refreshes crsf.hasTelemetry as it empties), then elrsinfo:update() to --
+-- pump the outgoing requests.                                           --
 ---------------------------------------------------------------------------
 
 local crsf = ...
@@ -108,13 +109,13 @@ local function updateModelMatch()
   crsf:requestElrsStatus()
 end
 
---- Per-tick pump; call right after crsf:poll() so the tick's frames are
--- dispatched and hasTelemetry is current. Any hasTelemetry edge wipes the
--- per-connection state before updateModelMatch() runs: a stale modelMismatch
--- can neither survive a disconnect nor suppress the next connection's status
--- poll via a late-arriving answer. poll() dispatches frames before it derives
--- hasTelemetry, so a dying connection's ELRS_STATUS always lands before the
--- edge is observed here.
+--- Per-tick pump; call right after drain() so the tick's frames are
+-- ingested and hasTelemetry is current. Any hasTelemetry edge wipes the
+-- per-connection state before updateModelMatch() runs: a stale
+-- modelMismatch can neither survive a disconnect nor suppress the next
+-- connection's status poll via a late-arriving answer. hasTelemetry only
+-- refreshes as a drain empties the queue, so a dying connection's
+-- ELRS_STATUS always lands before the edge is observed here.
 function ElrsInfo:update()
   local connected = crsf.hasTelemetry
   if connected ~= self._wasConnected then
@@ -289,8 +290,22 @@ local function onElrsStatus(data)
   ElrsInfo.modelMismatch = status.modelMismatch
 end
 
-crsf:registerHandler(crsf.CONST.FRAMETYPE_DEVICE_INFO, onDeviceInfo)
-crsf:registerHandler(crsf.CONST.FRAMETYPE_ELRS_STATUS, onElrsStatus)
+--- Route one frame into the info cache. Frames of other types are
+-- dropped: this singleton is its widget's only queue consumer (pop is
+-- destructive per instance), and the firmware delivers every instance its
+-- own copy of each frame.
+function ElrsInfo:_onFrame(command, data)
+  if command == crsf.CONST.FRAMETYPE_DEVICE_INFO then
+    onDeviceInfo(data)
+  elseif command == crsf.CONST.FRAMETYPE_ELRS_STATUS then
+    onElrsStatus(data)
+  end
+end
+
+--- Drain the calling script instance's pop queue into the info cache.
+function ElrsInfo:drain()
+  crsf.drain(self, self._onFrame)
+end
 
 -- ============================================================================
 -- Return singleton

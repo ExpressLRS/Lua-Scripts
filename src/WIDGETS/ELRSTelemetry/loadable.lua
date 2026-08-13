@@ -669,7 +669,7 @@ local wgt = {
 }
 
 function wgt.background()
-  crsf:poll()
+  elrsinfo:drain()
   elrsinfo:update()
   Telemetry.update()
 end

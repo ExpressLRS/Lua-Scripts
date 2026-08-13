@@ -1,20 +1,19 @@
 ---------------------------------------------------------------------------
 -- CRSF Protocol Singleton                                               --
 --                                                                       --
--- Allows multiple widgets to share a single CRSF connection.            --
--- crossfireTelemetryPop() is a destructive queue — each frame can only  --
--- be read once. This singleton is the sole consumer: it drains the      --
--- queue in poll() and fans each frame out to every widget that          --
--- registered a handler for that frame type. Widgets never call          --
--- crossfireTelemetryPop() directly; they register callbacks via         --
--- registerHandler() and push outgoing frames through CRSF.push().       --
+-- Shared CRSF transport: protocol constants, pop/push wrappers (and     --
+-- their simulator mock seam) and link-layer decoders. Frames are        --
+-- consumed pull-style: every consumer drains its own script instance's  --
+-- queue through CRSF.drain() (the firmware replicates incoming frames   --
+-- into each widget instance's private queue on color radios; on B&W the --
+-- standalone tool is the only consumer). Derived link state             --
+-- (hasTelemetry) refreshes as a drain empties the queue.                --
 --                                                                       --
 -- Loaded once via loadScript() from /SCRIPTS/ELRS/crsf.lua.             --
--- Returns a table with protocol constants, handler registry, and        --
--- pop queue dispatcher.                                                 --
 ---------------------------------------------------------------------------
 
 local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
+local sensors = loadScript("/SCRIPTS/ELRS/sensors.lua")()
 
 local CRSF = {}
 
@@ -84,27 +83,53 @@ CRSF.CONST = {
 -- Internal state
 -- ============================================================================
 
--- Handler registry: frameType -> { callback1, callback2, ... }
-CRSF._handlers = {}
-
--- Link state: derived from RQly in poll()
+-- Link state: derived from RQly as a drain empties the queue
 CRSF.hasTelemetry = false
-
--- Tick guard for poll()
-CRSF._lastPollTick = 0
 
 -- ============================================================================
 -- Default telemetry wrappers: delegate to real EdgeTX functions
--- When mocking is active, setMock() replaces these with mock implementations
+-- When mocking is active, setMock() replaces the underlying implementations
 -- ============================================================================
 
-function CRSF.pop()
+--- Pop one frame from the calling script instance's queue.
+-- consumer identifies the caller to the simulator mock, which emulates the
+-- firmware's per-widget queue replication with per-consumer cursors; real
+-- hardware ignores it. An empty-queue return is the end of a drain, so the
+-- derived link state refreshes here: frames are always ingested before
+-- consumers can observe a hasTelemetry flip. The ELRS TX zeroes RQly on
+-- disconnect, so a present, positive value is the truth about the link.
+function CRSF.pop(consumer)
+  local command, data = CRSF._popImpl(consumer)
+  if command == nil then
+    CRSF.hasTelemetry = (CRSF.getSensorValue("RQly") or 0) > 0
+  end
+  return command, data
+end
+
+function CRSF._popImpl(_consumer)
   return crossfireTelemetryPop()
+end
+
+--- Drain the calling script instance's queue, routing every frame through
+-- onFrame(consumer, command, data). consumer is both the queue identity
+-- handed to pop() and the receiver onFrame is invoked on, so consumers
+-- pass their routing method directly: CRSF.drain(self, self._onFrame).
+function CRSF.drain(consumer, onFrame)
+  local command, data
+  repeat
+    command, data = CRSF.pop(consumer)
+    if command then
+      onFrame(consumer, command, data)
+    end
+  until command == nil
 end
 
 function CRSF.push(command, data)
   return crossfireTelemetryPush(command, data)
 end
+
+-- Read a telemetry sensor value by name (/SCRIPTS/ELRS/sensors.lua)
+CRSF.getSensorValue = sensors.getSensorValue
 
 function CRSF.hasCrsfModule()
   for modIdx = 0, 1 do
@@ -114,28 +139,6 @@ function CRSF.hasCrsfModule()
     end
   end
   return false
-end
-
--- Field ID cache (string sensor name -> numeric ID)
-CRSF._vCache = {}
-
---- Read a telemetry sensor value by name.
--- Caches the getFieldInfo string->ID lookup once it succeeds; a sensor that is
--- not discovered yet is retried on every call, so it starts reading as soon as
--- EdgeTX creates it (e.g. sensor discovery running after the widget loaded).
--- getValue is called every time.
--- setMock() replaces this function with the simulator's mock telemetry.
-function CRSF.getSensorValue(id)
-  local cid = CRSF._vCache[id]
-  if cid == nil then
-    local info = getFieldInfo(id)
-    if info == nil then
-      return nil
-    end
-    cid = info.id
-    CRSF._vCache[id] = cid
-  end
-  return getValue(cid)
 end
 
 -- ============================================================================
@@ -152,12 +155,12 @@ local function setMock()
     return
   end
   local mock = mockModule()
-  CRSF.pop = mock.pop
+  CRSF._popImpl = mock.pop
   CRSF.push = mock.push
+  CRSF.getSensorValue = mock.getSensorValue
   CRSF.hasCrsfModule = function()
     return mock.moduleFound
   end
-  CRSF.getSensorValue = mock.getSensorValue
 end
 
 setMock()
@@ -165,74 +168,28 @@ setMock()
 setMock = nil
 
 -- ============================================================================
--- Handler registry
--- ============================================================================
-
---- Register a callback for a specific CRSF frame type.
--- @param frameType  numeric frame type (use CRSF.CONST.FRAMETYPE_*)
--- @param callback   function(data) called when a frame of this type is popped
-function CRSF:registerHandler(frameType, callback)
-  if not self._handlers[frameType] then
-    self._handlers[frameType] = {}
-  end
-  self._handlers[frameType][#self._handlers[frameType] + 1] = callback
-end
-
--- ============================================================================
--- Pop queue dispatcher
--- ============================================================================
-
---- Drain the pop queue and dispatch frames to registered handlers.
--- Guarded by a tick timestamp so only one effective poll runs per tick,
--- even if multiple widgets call this.
-function CRSF:poll()
-  local now = getTime()
-  if now == self._lastPollTick then
-    return
-  end
-  self._lastPollTick = now
-
-  while true do
-    local command, data = CRSF.pop()
-    if command == nil then
-      break
-    end
-    local fh = self._handlers[command]
-    if fh then
-      for _, cb in ipairs(fh) do
-        cb(data)
-      end
-    end
-  end
-
-  -- Connection state is derived from link quality at zero wire cost: the ELRS
-  -- TX zeroes RQly on disconnect, so a present, positive value is the truth
-  -- about the link. Derived after the drain so a frame from a dying connection
-  -- is dispatched before consumers observe the flip; handlers that keep
-  -- per-connection state key their resets off that ordering (see
-  -- /SCRIPTS/ELRS/crsf_elrsinfo.lua).
-  self.hasTelemetry = (CRSF.getSensorValue("RQly") or 0) > 0
-end
-
--- ============================================================================
 -- Shared helpers
 -- ============================================================================
 
---- Read a null-terminated string from a CRSF data array without mutating it.
--- poll() hands the same data table to every handler registered for a frame
--- type, so decoding must never write into the frame.
+--- Read a null-terminated string from a CRSF data array, converting the
+-- bytes to chars in place and concatenating the slice. The frame table is
+-- freshly allocated by every pop, and each frame type has exactly one
+-- string-decoding consumer (DEVICE_INFO and ELRS_STATUS decode only here),
+-- so mutating it is safe and saves a parts table per string. A second
+-- decode of the same frame would raise (string.char on a string) rather
+-- than corrupt silently.
 -- @param data   array of byte values
 -- @param off    1-based start offset
 -- @return string, nextOffset
 local function readString(data, off)
-  local parts = {}
+  local startOff = off
   local b = data[off]
   while b and b ~= 0 do
-    parts[#parts + 1] = string.char(b)
+    data[off] = string.char(b)
     off = off + 1
     b = data[off]
   end
-  return shim.tableConcat(parts), off + 1
+  return shim.tableConcat(data, nil, startOff, off - 1), off + 1
 end
 
 --- Decode a DEVICE_INFO (0x29) frame.
