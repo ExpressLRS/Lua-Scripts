@@ -1,11 +1,9 @@
 ---------------------------------------------------------------------------
 -- VTX Administrator Widget - UI for 480x320 (SD Tall)                   --
--- TX16S, TX16S MAX, TX16S Mark II                                       --
+-- Jumper T15, T15 Pro, TX15, ST16, PL18                                 --
 ---------------------------------------------------------------------------
 
 local ctx = ...
-local VTX = ctx.VTX
-local Protocol = ctx.Protocol
 local bgOpacity = ctx.bgOpacity
 local VTXDisplay = ctx.VTXDisplay
 local WidgetLayout = ctx.WidgetLayout
@@ -25,32 +23,17 @@ WidgetUI.breakpoints = {
 WidgetUI.fonts = {
   sixth = { status = BOLD },
   quarter = { status = BOLD },
-  third = { status = BOLD },
-  half = { hero = MIDSIZE, detail = SMLSIZE },
-  full = { hero = MIDSIZE, detail = SMLSIZE },
+  third = { status = BOLD, cheatsheet = SMLSIZE },
+  half = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
+  full = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
 }
-
-local function pitModeColor()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return COLOR_THEME_SECONDARY1
-  end
-  return VTX.state.pitmode and RED or COLOR_THEME_SECONDARY1
-end
-
-local function pitModeText()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return ""
-  end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
-end
 
 -- ============================================================================
 -- Minimized layout builders (by widget height tier)
 -- ============================================================================
 
 local TopBarUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/topbar.lua")({
-  Protocol = Protocol,
-  VTX = VTX,
+  VTXDisplay = VTXDisplay,
 })
 
 --- 1/6: single row. Wide: band + detail + cheatsheet. Narrow: band + detail.
@@ -120,8 +103,8 @@ function WidgetUI.buildQuarter(w, h, opa)
       type = lvgl.LABEL,
       align = LEFT,
       font = SMLSIZE,
-      color = pitModeColor,
-      text = pitModeText,
+      color = VTXDisplay.pitColor,
+      text = VTXDisplay.pitText,
     }
   end
   local rows = {
@@ -199,9 +182,10 @@ function WidgetUI.buildThird(w, h, opa)
       },
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.third.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -240,9 +224,10 @@ function WidgetUI.buildHalf(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.half.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -281,9 +266,10 @@ function WidgetUI.buildFull(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.full.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)

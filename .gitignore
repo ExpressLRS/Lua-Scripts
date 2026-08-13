@@ -1,5 +1,5 @@
 *.luac
-color/WIDGETS/ELRSVTXAdmin/presets.txt
+src/WIDGETS/ELRSVTXAdmin/presets.txt
 bin/
 .claude/plans/
 TODO.md

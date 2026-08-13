@@ -17,31 +17,25 @@ WidgetUI.breakpoints = {
   sixthH = 74,
   quarterH = 104,
   thirdH = 146,
+  halfH = 154,
 }
 
 WidgetUI.fonts = {
   sixth = { hero = BOLD },
   quarter = { hero = BOLD },
-  third = { hero = MIDSIZE, detail = SMLSIZE },
-  full = { hero = DBLSIZE, detail = 0 },
+  third = { hero = MIDSIZE, heroStatus = BOLD, detail = SMLSIZE },
+  full = { hero = MIDSIZE, heroStatus = 0, detail = 0 },
 }
 
 -- ============================================================================
 -- Minimized display helpers
 -- ============================================================================
 
-local function heroColorMismatch()
-  if crsf.modelMismatch then
-    return RED
-  end
-  return COLOR_THEME_PRIMARY1
-end
-
 local function detailColor()
   if not crsf.hasTelemetry then
     return COLOR_THEME_SECONDARY1
   end
-  return Telemetry.rangeColor(Telemetry.smoothRng or 0)
+  return Telemetry.rangeColor(Telemetry.rangePct)
 end
 
 local function heroTextLq()
@@ -49,8 +43,7 @@ local function heroTextLq()
   if status then
     return status
   end
-  local tlm = Telemetry.readLink()
-  return table.concat({ "LQ ", tostring(tlm.rqly or 0), "%" })
+  return table.concat({ "LQ ", tostring(Telemetry.link.rqly or 0), "%" })
 end
 
 -- ============================================================================
@@ -77,8 +70,8 @@ function WidgetUI.buildSixth(w, h, opa)
         {
           type = lvgl.LABEL,
           y = lvgl.PAD_SMALL,
-          font = BOLD,
-          color = heroColorMismatch,
+          font = WidgetUI.fonts.sixth.hero,
+          color = Telemetry.heroColor,
           text = heroTextLq,
         },
       },
@@ -132,8 +125,8 @@ function WidgetUI.buildQuarter(w, h, opa)
           type = lvgl.LABEL,
           w = c1w,
           align = LEFT,
-          font = BOLD,
-          color = heroColorMismatch,
+          font = WidgetUI.fonts.quarter.hero,
+          color = Telemetry.heroColor,
           text = heroTextLq,
         },
         {
@@ -181,13 +174,8 @@ function WidgetUI.buildThird(w, h, opa)
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
-    font = function()
-      if Telemetry.statusText() then
-        return BOLD
-      end
-      return MIDSIZE
-    end,
-    color = heroColorMismatch,
+    font = Telemetry.heroFont(WidgetUI.fonts.third),
+    color = Telemetry.heroColor,
     text = heroTextLq,
   }
   rows[#rows + 1] = {
@@ -208,6 +196,47 @@ function WidgetUI.buildThird(w, h, opa)
   WidgetLayout.column(w, h, opa, rows)
 end
 
+--- Data rows shared by the 1/2 and 1/1 tiers:
+--- LQ, Range/RSSI, RF mode/power, battery.
+local function appendDataRows(rows)
+  rows[#rows + 1] = {
+    type = lvgl.LABEL,
+    align = LEFT,
+    font = Telemetry.heroFont(WidgetUI.fonts.full),
+    color = Telemetry.heroColor,
+    text = heroTextLq,
+  }
+  rows[#rows + 1] = {
+    type = lvgl.LABEL,
+    align = LEFT,
+    font = WidgetUI.fonts.full.detail,
+    color = detailColor,
+    text = Telemetry.signalText,
+  }
+  rows[#rows + 1] = {
+    type = lvgl.LABEL,
+    align = LEFT,
+    font = SMLSIZE,
+    color = COLOR_THEME_SECONDARY1,
+    text = Telemetry.rfDetailText,
+  }
+  rows[#rows + 1] = {
+    type = lvgl.LABEL,
+    align = LEFT,
+    font = SMLSIZE,
+    color = COLOR_THEME_SECONDARY1,
+    text = Telemetry.batteryText,
+  }
+end
+
+--- 1/2: the four data rows without the title.
+--- Sits between 1/3 and 1/1 so the battery row is never clipped off the bottom.
+function WidgetUI.buildHalf(w, h, opa)
+  local rows = {}
+  appendDataRows(rows)
+  WidgetLayout.column(w, h, opa, rows)
+end
+
 --- 1/1: full telemetry display with title and large fonts.
 function WidgetUI.buildFull(w, h, opa)
   local rows = {
@@ -218,51 +247,8 @@ function WidgetUI.buildFull(w, h, opa)
       color = COLOR_THEME_SECONDARY1,
       text = "ExpressLRS",
     },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = function()
-        if Telemetry.statusText() then
-          return 0
-        end
-        return MIDSIZE
-      end,
-      color = heroColorMismatch,
-      text = heroTextLq,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = WidgetUI.fonts.full.detail,
-      color = detailColor,
-      text = Telemetry.signalText,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = SMLSIZE,
-      color = COLOR_THEME_SECONDARY1,
-      text = Telemetry.rfDetailText,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = SMLSIZE,
-      color = COLOR_THEME_SECONDARY1,
-      text = function()
-        local vbat = crsf.getSensorValue("RxBt")
-        if vbat == nil or vbat <= 0 then
-          return ""
-        end
-        Telemetry.checkCellCount(vbat)
-        local cells = Telemetry.cellCnt
-        if cells then
-          return string.format("Bat %dS %.2fV", cells, vbat / cells)
-        end
-        return string.format("Bat %.2fV", vbat)
-      end,
-    },
   }
+  appendDataRows(rows)
   WidgetLayout.column(w, h, opa, rows)
 end
 
@@ -280,6 +266,8 @@ function WidgetUI.build(wgtZone, opts)
     WidgetUI.buildQuarter(w, h, opa)
   elseif h < bp.thirdH then
     WidgetUI.buildThird(w, h, opa)
+  elseif h < bp.halfH then
+    WidgetUI.buildHalf(w, h, opa)
   else
     WidgetUI.buildFull(w, h, opa)
   end

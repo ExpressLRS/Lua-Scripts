@@ -4,8 +4,6 @@
 ---------------------------------------------------------------------------
 
 local ctx = ...
-local VTX = ctx.VTX
-local Protocol = ctx.Protocol
 local bgOpacity = ctx.bgOpacity
 local VTXDisplay = ctx.VTXDisplay
 local WidgetLayout = ctx.WidgetLayout
@@ -25,42 +23,17 @@ WidgetUI.breakpoints = {
 WidgetUI.fonts = {
   sixth = { status = BOLD },
   quarter = { status = BOLD },
-  third = { status = BOLD },
-  half = { hero = BOLD, detail = SMLSIZE },
-  full = { hero = MIDSIZE, detail = SMLSIZE },
+  third = { status = BOLD, cheatsheet = SMLSIZE },
+  half = { hero = BOLD, detail = SMLSIZE, cheatsheet = SMLSIZE },
+  full = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = SMLSIZE },
 }
-
-local function pitModeColor()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return COLOR_THEME_SECONDARY1
-  end
-  return VTX.state.pitmode and RED or COLOR_THEME_SECONDARY1
-end
-
-local function pitModeText()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return ""
-  end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
-end
-
-local function pitModeTextLong()
-  if not Protocol.isActive() then
-    return ""
-  end
-  if VTX.state.band == 0 then
-    return "VTX Disabled"
-  end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
-end
 
 -- ============================================================================
 -- Minimized layout builders (by widget height tier)
 -- ============================================================================
 
 local TopBarUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/topbar.lua")({
-  Protocol = Protocol,
-  VTX = VTX,
+  VTXDisplay = VTXDisplay,
 })
 
 --- 1/6: single row with band + status + power + pit mode + cheatsheet.
@@ -95,8 +68,8 @@ function WidgetUI.buildSixth(w, h, opa)
       type = lvgl.LABEL,
       align = LEFT,
       font = SMLSIZE,
-      color = pitModeColor,
-      text = pitModeText,
+      color = VTXDisplay.pitColor,
+      text = VTXDisplay.pitText,
     },
   }
   local labels = VTXDisplay.build6posLabels()
@@ -150,12 +123,7 @@ function WidgetUI.buildQuarter(w, h, opa)
           align = LEFT,
           font = SMLSIZE,
           color = RED,
-          text = function()
-            if not Protocol.isActive() or VTX.state.band == 0 then
-              return ""
-            end
-            return VTX.state.pitmode and "Pit" or ""
-          end,
+          text = VTXDisplay.pitShort,
         },
       },
     },
@@ -211,14 +179,15 @@ function WidgetUI.buildThird(w, h, opa)
         type = lvgl.LABEL,
         align = LEFT,
         font = SMLSIZE,
-        color = pitModeColor,
-        text = pitModeText,
+        color = VTXDisplay.pitColor,
+        text = VTXDisplay.pitText,
       },
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.third.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -268,15 +237,16 @@ function WidgetUI.buildHalf(w, h, opa)
           type = lvgl.LABEL,
           align = LEFT,
           font = SMLSIZE,
-          color = pitModeColor,
-          text = pitModeTextLong,
+          color = VTXDisplay.pitColor,
+          text = VTXDisplay.pitTextLong,
         },
       },
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.half.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -315,9 +285,10 @@ function WidgetUI.buildFull(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.full.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)

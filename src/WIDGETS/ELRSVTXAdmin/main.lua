@@ -4,7 +4,7 @@
 -- (full-screen) via the CRSF config protocol to the ELRS TX module.     --
 --                                                                       --
 -- Uses the loadable.lua pattern to minimize memory when not in use.     --
--- Requires /SCRIPTS/ELRSLib on the SD card for shared CRSF protocol.    --
+-- Requires /SCRIPTS/ELRS on the SD card for shared CRSF protocol.       --
 ---------------------------------------------------------------------------
 
 local name = "ELRSVTXAdmin"
@@ -16,9 +16,25 @@ local function create(zone, options)
     ---@diagnostic disable-next-line: need-check-nil
     _crsfSingleton = getCRSF()
   end
+  if not _crsfSessionClass then
+    local getParams = loadScript("/SCRIPTS/ELRS/crsf_params.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    local params = getParams(_crsfSingleton)
+    local getSessionClass = loadScript("/SCRIPTS/ELRS/crsf_session.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    _crsfSessionClass = getSessionClass(_crsfSingleton, params)
+  end
+  if not _vtxPresetsStorage then
+    local getFileStorage = loadScript("/SCRIPTS/ELRS/file_storage.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    local fileStorage = getFileStorage()
+    local getPresetsStorage = loadScript("/WIDGETS/ELRSVTXAdmin/presets_storage.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    _vtxPresetsStorage = getPresetsStorage(fileStorage)
+  end
   local loadable = loadScript("/WIDGETS/" .. name .. "/loadable.lua")
   ---@diagnostic disable-next-line: need-check-nil
-  return loadable(zone, options, _crsfSingleton)
+  return loadable(zone, options, _crsfSingleton, _crsfSessionClass, _vtxPresetsStorage)
 end
 
 local function refresh(widget, event, touchState)

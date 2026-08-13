@@ -4,8 +4,7 @@
 ---------------------------------------------------------------------------
 
 local ctx = ...
-local VTX = ctx.VTX
-local Protocol = ctx.Protocol
+local VTXAdmin = ctx.VTXAdmin
 local bgOpacity = ctx.bgOpacity
 local VTXDisplay = ctx.VTXDisplay
 local WidgetLayout = ctx.WidgetLayout
@@ -26,24 +25,10 @@ WidgetUI.breakpoints = {
 WidgetUI.fonts = {
   sixth = { status = BOLD },
   quarter = { status = BOLD },
-  third = { status = BOLD },
-  half = { hero = MIDSIZE, detail = SMLSIZE },
-  full = { hero = MIDSIZE, detail = SMLSIZE },
+  third = { status = BOLD, cheatsheet = STDSIZE },
+  half = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
+  full = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
 }
-
-local function pitModeColor()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return COLOR_THEME_SECONDARY1
-  end
-  return VTX.state.pitmode and RED or COLOR_THEME_SECONDARY1
-end
-
-local function pitModeText()
-  if not Protocol.isActive() or VTX.state.band == 0 then
-    return ""
-  end
-  return VTX.state.pitmode and "Pit Mode On" or "Pit Mode Off"
-end
 
 -- ============================================================================
 -- Minimized display helpers (portrait-specific overrides)
@@ -51,50 +36,23 @@ end
 
 --- Shorter detail line for narrow portrait screen.
 local function detailLine()
-  if not Protocol.isActive() then
+  if not VTXAdmin.hasPower() then
     return ""
   end
-  if VTX.state.band == 0 then
-    return ""
-  end
-  local pwr = VTX.state.power > 0 and table.concat({ "P", VTX.state.power }) or "P-"
-  local pit = VTX.state.pitmode and " Pit" or ""
-  return table.concat({ pwr, pit })
+  local pit = VTXAdmin.state.pitmode and " Pit" or ""
+  return table.concat({ VTXDisplay.powerShort(), pit })
 end
 
---- Build two narrow cheatsheet rows (3 labels each), or nil pair.
-local function buildCheatsheetNarrow()
-  local labels = VTXDisplay.build6posLabels()
-  if #labels == 0 then
-    return nil, nil
+--- Shorter long-form detail line for narrow portrait screen.
+local function detailLong()
+  if VTXAdmin.isDisabled() then
+    return "VTX Disabled"
   end
-  local row1, row2 = {}, {}
-  for i = 1, 3 do
-    row1[#row1 + 1] = labels[i]
+  if not VTXAdmin.hasPower() then
+    return ""
   end
-  for i = 4, 6 do
-    row2[#row2 + 1] = labels[i]
-  end
-  local hasModule = function()
-    return Protocol.state ~= Protocol.STATE_NO_MODULE
-  end
-  return {
-    type = lvgl.BOX,
-    align = LEFT,
-    flexFlow = lvgl.FLOW_ROW,
-    flexPad = lvgl.PAD_TINY,
-    borderPad = 0,
-    visible = hasModule,
-    children = row1,
-  }, {
-    type = lvgl.BOX,
-    align = LEFT,
-    flexFlow = lvgl.FLOW_ROW,
-    flexPad = lvgl.PAD_TINY,
-    borderPad = 0,
-    visible = hasModule,
-    children = row2,
-  }
+  local pit = VTXAdmin.state.pitmode and "  Pit" or ""
+  return table.concat({ VTXDisplay.powerLong(), pit })
 end
 
 -- ============================================================================
@@ -102,8 +60,7 @@ end
 -- ============================================================================
 
 local TopBarUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/topbar.lua")({
-  Protocol = Protocol,
-  VTX = VTX,
+  VTXDisplay = VTXDisplay,
 })
 
 --- 1/6: single row with band/channel + compact detail.
@@ -190,17 +147,17 @@ function WidgetUI.buildQuarter(w, h, opa)
           type = lvgl.LABEL,
           align = LEFT,
           font = SMLSIZE,
-          color = pitModeColor,
-          text = pitModeText,
+          color = VTXDisplay.pitColor,
+          text = VTXDisplay.pitText,
         },
       },
     },
   }
   if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
+    local cs1, cs2 = VTXDisplay.buildCheatsheetRows()
+    if cs1 then
+      rows[#rows + 1] = cs1
+      rows[#rows + 1] = cs2
     end
   else
     local cs = VTXDisplay.buildCheatsheet()
@@ -262,17 +219,10 @@ function WidgetUI.buildThird(w, h, opa)
     },
   }
   -- Cheatsheet rows
-  if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
-    end
-  else
-    local cs = VTXDisplay.buildCheatsheet()
-    if cs then
-      rows[#rows + 1] = cs
-    end
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.third.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -308,30 +258,13 @@ function WidgetUI.buildHalf(w, h, opa)
       align = LEFT,
       font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
-      text = function()
-        if not Protocol.isActive() then
-          return ""
-        end
-        if VTX.state.band == 0 then
-          return "VTX Disabled"
-        end
-        local pwr = VTX.state.power > 0 and table.concat({ "Power ", VTX.state.power }) or "Power -"
-        local pit = VTX.state.pitmode and "  Pit" or ""
-        return table.concat({ pwr, pit })
-      end,
+      text = detailLong,
     },
   }
-  if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
-    end
-  else
-    local cs = VTXDisplay.buildCheatsheet()
-    if cs then
-      rows[#rows + 1] = cs
-    end
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.half.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -370,17 +303,10 @@ function WidgetUI.buildFull(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  if w < 200 then
-    local r1, r2 = buildCheatsheetNarrow()
-    if r1 then
-      rows[#rows + 1] = r1
-      rows[#rows + 1] = r2
-    end
-  else
-    local cs = VTXDisplay.buildCheatsheet()
-    if cs then
-      rows[#rows + 1] = cs
-    end
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.full.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)

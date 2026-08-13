@@ -7,10 +7,9 @@ local deps = ...
 
 local App = deps.App
 local Navigation = deps.Navigation
-local Protocol = deps.Protocol
+local session = deps.session
+local crsf = deps.crsf
 local VERSION = deps.VERSION
-
-local VERSION_CHECK_ENABLED = true
 
 -- ============================================================================
 -- UI state
@@ -21,11 +20,13 @@ local UI = {
   uiBuilt = false,
   folderWasReady = false,
 
-  -- Warning/command state (LVGL-specific)
-  warningDismissed = false,
+  -- Warning/command state (LVGL-specific). cmdLastStatus remembers which
+  -- command status the current dialog was built for, so a status change
+  -- swaps the dialog exactly once.
   warningDismissedAt = nil,
   warningDialog = nil,
   commandDialog = nil,
+  cmdLastStatus = nil,
 }
 
 -- ============================================================================
@@ -413,9 +414,7 @@ end
 -- ============================================================================
 
 function UI.init()
-  if VERSION_CHECK_ENABLED then
-    versionCheckResult = checkEdgeTxVersion()
-  end
+  versionCheckResult = checkEdgeTxVersion()
 end
 
 -- ============================================================================
@@ -423,7 +422,7 @@ end
 -- ============================================================================
 
 function UI.preCheck(_event)
-  if versionCheckResult == false then
+  if not versionCheckResult then
     if not UI.uiBuilt then
       showVersionRequired()
       UI.uiBuilt = true
@@ -495,6 +494,14 @@ end
 -- ============================================================================
 
 function UI.openFolder(folderId, folderName)
+  -- The subtitle shows the folder name without the dynamic value suffix
+  -- ExpressLRS embeds in it (e.g. "VTX Admin (R:4:2:P)").
+  if folderName then
+    local par = string.find(folderName, " (", 1, true)
+    if par then
+      folderName = string.sub(folderName, 1, par - 1)
+    end
+  end
   App.enterFolder(folderId, folderName)
   UI.invalidate()
 end
@@ -517,9 +524,9 @@ function UI.handleBack()
   else
     local entry = App.goBack()
     if entry and entry.type == Navigation.TYPE_DEVICE and entry.prevDeviceId then
-      local prevDevice = Protocol.getDevice(entry.prevDeviceId)
+      local prevDevice = session:getDevice(entry.prevDeviceId)
       if prevDevice then
-        Protocol.setDevice(prevDevice)
+        session:setDevice(prevDevice)
       end
     end
     UI.invalidate()
@@ -531,39 +538,38 @@ end
 -- ============================================================================
 
 local function onCommandCancel()
-  Protocol.commandCancel()
+  session:cancelCommand()
   UI.commandDialog = nil
   UI.invalidate()
 end
 
 local function handleCommandPopup()
-  if not Protocol.fieldPopup then
+  local command = session.command
+  if not command then
     if UI.commandDialog then
       UI.commandDialog = nil
       UI.invalidate()
     end
+    UI.cmdLastStatus = nil
     return
   end
 
-  if Protocol.fieldPopup.status == Protocol.CRSF.CMD_ASKCONFIRM then
-    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= Protocol.CRSF.CMD_ASKCONFIRM then
-      local field = Protocol.fieldPopup
-      UI.commandDialog = CommandPage.showConfirm(field.name, function()
-        return field.info or ""
+  if command.status == crsf.CONST.CMD_ASKCONFIRM then
+    if not UI.commandDialog or UI.cmdLastStatus ~= crsf.CONST.CMD_ASKCONFIRM then
+      UI.commandDialog = CommandPage.showConfirm(command.name, function()
+        return command.info or ""
       end, function()
-        Protocol.commandConfirm()
+        session:confirmCommand()
       end, onCommandCancel)
     end
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
-  elseif Protocol.fieldPopup.status == Protocol.CRSF.CMD_EXECUTING then
-    if not UI.commandDialog or Protocol.fieldPopup.lastStatus ~= Protocol.CRSF.CMD_EXECUTING then
-      local field = Protocol.fieldPopup
-      UI.commandDialog = CommandPage.showExecuting(field.name, function()
-        return field.info or ""
+  elseif command.status == crsf.CONST.CMD_EXECUTING then
+    if not UI.commandDialog or UI.cmdLastStatus ~= crsf.CONST.CMD_EXECUTING then
+      UI.commandDialog = CommandPage.showExecuting(command.name, function()
+        return command.info or ""
       end, onCommandCancel)
     end
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
   end
+  UI.cmdLastStatus = command.status
 end
 
 -- ============================================================================
@@ -574,38 +580,31 @@ local function handleWarning()
   if App.shouldExit then
     return
   end
-  if Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_STATUS_MASK then
-    if not UI.warningDialog and not UI.warningDismissed then
-      if Protocol.isModelMismatch() then
+  if session.status.flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK then
+    if not UI.warningDialog and not UI.warningDismissedAt then
+      if session.status.modelMismatch then
         UI.warningDialog = ModelMismatchDialog.show(function()
-          UI.warningDismissed = true
           UI.warningDismissedAt = getTime()
           UI.invalidate()
         end, function()
-          UI.warningDismissed = true
           App.shouldExit = true
         end)
-      elseif Protocol.hasCriticalError() then
+      elseif session.status.criticalError then
         Dialogs.showMessage({
           title = "Warning",
-          message = Protocol.elrsFlagsInfo,
+          message = session.status.warning,
         })
         UI.warningDialog = true
-        UI.warningDismissed = true
         UI.warningDismissedAt = getTime()
       end
     end
-    if UI.warningDismissed and UI.warningDismissedAt then
-      if getTime() - UI.warningDismissedAt > 6000 then
-        UI.warningDismissed = false
-        UI.warningDismissedAt = nil
-        UI.warningDialog = nil
-      end
+    if UI.warningDismissedAt and getTime() - UI.warningDismissedAt > 6000 then
+      UI.warningDismissedAt = nil
+      UI.warningDialog = nil
     end
   else
     UI.warningDialog = nil
-    if not UI.warningDismissedAt or (getTime() - UI.warningDismissedAt > 6000) then
-      UI.warningDismissed = false
+    if UI.warningDismissedAt and getTime() - UI.warningDismissedAt > 6000 then
       UI.warningDismissedAt = nil
     end
   end
@@ -621,15 +620,7 @@ function UI.render(_event, _touchState)
   if not UI.commandDialog then
     handleWarning()
 
-    local currentFolder = Navigation.getCurrent()
-    local folderReady = Protocol.isFolderLoaded(currentFolder)
-    if folderReady and not UI.folderWasReady then
-      if UI.uiBuilt then
-        UI.invalidate()
-      end
-    end
-
-    if not UI.uiBuilt and #Protocol.fields > 0 then
+    if not UI.uiBuilt and session.fieldsCount > 0 then
       UI.build()
     end
   end
@@ -644,7 +635,7 @@ function UI.getSubtitle()
     local top = Navigation.stack[#Navigation.stack]
     local subtitleParts = { top.name or "" }
 
-    local loaded, total = Protocol.getFolderLoadProgress(Navigation.getCurrent())
+    local loaded, total = session:folderLoadProgress(Navigation.getCurrent())
     if loaded and loaded < total then
       subtitleParts[#subtitleParts + 1] = string.format(" • Loading %d%%", math.floor(loaded / total * 100))
     end
@@ -652,26 +643,23 @@ function UI.getSubtitle()
     return table.concat(subtitleParts)
   end
 
-  local loaded, total = Protocol.getFolderLoadProgress(nil)
-  if loaded and loaded < total and Protocol.fieldsCount > 0 then
+  local loaded, total = session:folderLoadProgress(nil)
+  if loaded and loaded < total and session.fieldsCount > 0 then
     return string.format("Loading %d%%", math.floor(loaded / total * 100))
   end
 
+  local status = session.status
   local subtitle = ""
-  if Protocol.receivedPackets then
-    local state = Protocol.hasTelemetry() and "Telemetry OK" or "No telemetry"
-    subtitle = string.format("%u/%u • %s", Protocol.lostPackets, Protocol.receivedPackets, state)
+  if status.receivedPackets then
+    local state = status.connected and "Telemetry OK" or "No telemetry"
+    subtitle = string.format("%u/%u • %s", status.lostPackets, status.receivedPackets, state)
   end
 
-  if
-    Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_STATUS_MASK
-    and Protocol.elrsFlagsInfo
-    and Protocol.elrsFlagsInfo ~= ""
-  then
+  if status.flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and status.warning and status.warning ~= "" then
     if subtitle ~= "" then
-      subtitle = table.concat({ subtitle, " • ", Protocol.elrsFlagsInfo })
+      subtitle = table.concat({ subtitle, " • ", status.warning })
     else
-      subtitle = Protocol.elrsFlagsInfo
+      subtitle = status.warning
     end
   end
 
@@ -719,8 +707,7 @@ function UI.createToggleRow(pg, field)
             end,
             set = function(val)
               field.value = val
-              Protocol.fieldIntSave(field)
-              Protocol.reloadRelatedFields(field)
+              session:writeField(field)
             end,
             active = function()
               return not field.disabled
@@ -746,7 +733,7 @@ function UI.createToggleRow(pg, field)
 end
 
 function UI.createChoiceRow(pg, field)
-  local valuesRef = field.values
+  local valuesRef = field.valuesRev
   local choiceWidget
 
   local setting = pg:setting({
@@ -756,8 +743,10 @@ function UI.createChoiceRow(pg, field)
       if field.hidden then
         return false
       end
-      if field.values ~= valuesRef then
-        valuesRef = field.values
+      -- The values table is refilled in place (identity is stable); the
+      -- codec bumps valuesRev when the contents change.
+      if field.valuesRev ~= valuesRef then
+        valuesRef = field.valuesRev
         if choiceWidget then
           choiceWidget:set({ values = field.values or {} })
         end
@@ -784,8 +773,7 @@ function UI.createChoiceRow(pg, field)
     end,
     set = function(val)
       field.value = val - 1
-      Protocol.fieldIntSave(field)
-      Protocol.reloadRelatedFields(field)
+      session:writeField(field)
     end,
     active = function()
       return not field.disabled
@@ -810,7 +798,7 @@ function UI.createChoiceRow(pg, field)
 end
 
 function UI.createNumberRow(pg, field)
-  local isFloat = field.type == Protocol.CRSF.FLOAT
+  local isFloat = field.type == crsf.CONST.FIELD_FLOAT
   local numberEdit = {
     type = lvgl.NUMBER_EDIT,
     min = field.min or 0,
@@ -823,8 +811,7 @@ function UI.createNumberRow(pg, field)
     end,
     edited = function(val)
       field.value = val
-      Protocol.fieldIntSave(field)
-      Protocol.reloadRelatedFields(field)
+      session:writeField(field)
     end,
     display = function(val)
       if isFloat then
@@ -919,8 +906,7 @@ function UI.createStringRow(pg, field)
           length = math.min(math.max(field.maxlen or 32, 32), 128),
           set = function(val)
             field.value = val
-            Protocol.fieldStringSave(field)
-            Protocol.reloadRelatedFields(field)
+            session:writeField(field)
           end,
           active = function()
             return not field.disabled
@@ -963,31 +949,27 @@ function UI.createCommandWidget(pg, field)
     end,
     w = lvgl.PERCENT_SIZE + 99,
     press = function()
-      Protocol.handleCommandSave(field)
+      session:execCommand(field)
     end,
   })
 end
 
-function UI.buildFieldWidget(pg, field, folderWidth)
+function UI.buildFieldWidget(pg, field)
   if not field then
     return
   end
 
   local fieldType = field.type
 
-  if fieldType == Protocol.CRSF.FOLDER then
-    return UI.createFolderWidget(pg, field, folderWidth)
-  end
-
-  if fieldType == Protocol.CRSF.COMMAND then
+  if fieldType == crsf.CONST.FIELD_COMMAND then
     return UI.createCommandWidget(pg, field)
   end
 
-  if fieldType <= Protocol.CRSF.INT16 or fieldType == Protocol.CRSF.FLOAT then
+  if fieldType <= crsf.CONST.FIELD_INT16 or fieldType == crsf.CONST.FIELD_FLOAT then
     return UI.createNumberRow(pg, field)
   end
 
-  if fieldType == Protocol.CRSF.TEXT_SELECTION then
+  if fieldType == crsf.CONST.FIELD_TEXT_SELECTION then
     if UI.isBooleanField(field) then
       return UI.createToggleRow(pg, field)
     else
@@ -995,11 +977,11 @@ function UI.buildFieldWidget(pg, field, folderWidth)
     end
   end
 
-  if fieldType == Protocol.CRSF.STRING then
+  if fieldType == crsf.CONST.FIELD_STRING then
     return UI.createStringRow(pg, field)
   end
 
-  if fieldType == Protocol.CRSF.INFO then
+  if fieldType == crsf.CONST.FIELD_INFO then
     return UI.createInfoRow(pg, field)
   end
 end
@@ -1042,8 +1024,8 @@ function UI.build()
       flexPad = lvgl.PAD_SMALL,
       borderPad = lvgl.PAD_TINY,
     })
-    for _, device in ipairs(Protocol.devices) do
-      if device.id ~= Protocol.deviceId then
+    for _, device in ipairs(session.devices) do
+      if device.id ~= session.deviceId then
         devicesBox:button({
           text = device.name or "Unknown",
           w = lvgl.PERCENT_SIZE + 100,
@@ -1054,10 +1036,10 @@ function UI.build()
       end
     end
   else
-    local fieldsInFolder = Protocol.getFieldsInFolder(currentFolder)
+    local fieldsInFolder = session:fieldsInFolder(currentFolder)
 
     if currentFolder == nil then
-      UI.createInfoRow(fieldContainer, { name = "Device name", value = Protocol.deviceName or "Searching..." })
+      UI.createInfoRow(fieldContainer, { name = "Device name", value = session.deviceName or "Searching..." })
     end
 
     local FOLDERS_PER_ROW = 2
@@ -1071,9 +1053,9 @@ function UI.build()
     while i <= #fieldsInFolder do
       local field = fieldsInFolder[i]
 
-      if field.type == Protocol.CRSF.FOLDER then
+      if field.type == crsf.CONST.FIELD_FOLDER then
         local folderBatch = {}
-        while i <= #fieldsInFolder and fieldsInFolder[i].type == Protocol.CRSF.FOLDER do
+        while i <= #fieldsInFolder and fieldsInFolder[i].type == crsf.CONST.FIELD_FOLDER do
           folderBatch[#folderBatch + 1] = fieldsInFolder[i]
           i = i + 1
         end
@@ -1107,11 +1089,11 @@ function UI.build()
       end
     end
 
-    if currentFolder == nil and Protocol.deviceIsELRS_TX then
+    if currentFolder == nil and session.isElrsTx then
       UI.createInfoRow(fieldContainer, { name = "Lua script version", value = VERSION })
     end
 
-    if currentFolder == nil and #Protocol.devices > 1 and not Navigation.hasDeviceEntry() then
+    if currentFolder == nil and #session.devices > 1 and not Navigation.hasDeviceEntry() then
       local wrapper = fieldContainer:box({
         w = lvgl.PERCENT_SIZE + 100,
         flexFlow = lvgl.FLOW_COLUMN,

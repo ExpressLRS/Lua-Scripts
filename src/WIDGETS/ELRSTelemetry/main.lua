@@ -4,7 +4,7 @@
 -- Battery, Current, GPS, and Flight Mode.                              --
 --                                                                      --
 -- Uses the loadable.lua pattern to minimize memory when not in use.    --
--- Requires /SCRIPTS/ELRSLib on the SD card for shared CRSF protocol.   --
+-- Requires /SCRIPTS/ELRS on the SD card for shared CRSF protocol.      --
 ---------------------------------------------------------------------------
 
 local name = "ELRSTelemetry"
@@ -16,9 +16,14 @@ local function create(zone, options)
     ---@diagnostic disable-next-line: need-check-nil
     _crsfSingleton = getCRSF()
   end
+  if not _elrsInfoSingleton then
+    local getElrsInfo = loadScript("/SCRIPTS/ELRS/crsf_elrsinfo.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    _elrsInfoSingleton = getElrsInfo(_crsfSingleton)
+  end
   local loadable = loadScript("/WIDGETS/" .. name .. "/loadable.lua")
   ---@diagnostic disable-next-line: need-check-nil
-  return loadable(zone, options, _crsfSingleton)
+  return loadable(zone, options, _crsfSingleton, _elrsInfoSingleton)
 end
 
 local function refresh(widget, event, touchState)

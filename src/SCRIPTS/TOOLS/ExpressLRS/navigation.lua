@@ -34,14 +34,10 @@ end
 -- viewState: optional table of UI state to preserve (e.g. cursor position).
 -- Merged into the nav entry so the UI can restore it on goBack().
 function Navigation.openFolder(folderId, folderName, viewState)
-  local baseName = folderName
-  if folderName then
-    baseName = string.match(folderName, "^(.-)%s*%(.*%)$") or folderName
-  end
   local entry = {
     type = Navigation.TYPE_FOLDER,
     id = folderId,
-    name = baseName,
+    name = folderName,
   }
   if viewState then
     for k, v in pairs(viewState) do

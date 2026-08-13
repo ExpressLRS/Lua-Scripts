@@ -35,6 +35,8 @@ libraries:
 tools:
   - name: ExpressLRS
     path: SCRIPTS/TOOLS/ExpressLRS
+    depends:
+      - ELRS
 
 widgets:
   - name: ELRSTelemetry

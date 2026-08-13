@@ -8,46 +8,63 @@
 ---- # Unified tool for BW and color LCD radios (EdgeTX 2.11.6+/2.12.1+)     #
 ---- #########################################################################
 
-local VERSION = "r2"
+local VERSION = "r3"
 local useLvgl = (lvgl ~= nil)
 
 -- ============================================================================
 -- Load shared modules
 -- ============================================================================
 
-local shim = loadScript("/SCRIPTS/TOOLS/ExpressLRS/shim.lua")()
-local Protocol = loadScript("/SCRIPTS/TOOLS/ExpressLRS/protocol.lua")(shim)
-local Navigation = loadScript("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")()
+-- A full collection before each load frees the previous compile's parser
+-- scratch; the firmware runs no GC between loadScript calls, so on a fresh
+-- install (no .luac yet) the compile peaks would otherwise stack.
+local function loadPart(path, arg1, arg2)
+  collectgarbage("collect")
+  local chunk = loadScript(path)
+  if chunk == nil then
+    error(path)
+  end
+  return chunk(arg1, arg2)
+end
+
+local crsf = loadPart("/SCRIPTS/ELRS/crsf.lua")
+local params = loadPart("/SCRIPTS/ELRS/crsf_params.lua", crsf)
+local CRSFSession = loadPart("/SCRIPTS/ELRS/crsf_session.lua", crsf, params)
+local Navigation = loadPart("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")
 
 -- ============================================================================
--- App Module: Pure business logic (zero UI references)
+-- App Module: business logic between the session and the UI
 -- ============================================================================
 
 local App = {
+  -- Tool-internal pseudo field types for the synthetic device rows in the
+  -- "Other Devices" list. Values sit above the wire range: the type byte is
+  -- masked with 0x7f at parse, so a real field type can never exceed 127 --
+  -- unlike 15/16, which the previous numbering used and which shadow
+  -- CRSF_VTX (0x0F) on the wire.
+  DEVICE = 128,
+  DEVICE_FOLDER = 129,
+
   crsfModuleChecked = false,
   crsfModuleFound = false,
   shouldExit = false,
 }
 
-function App.reset()
-  App.crsfModuleChecked = false
-  App.crsfModuleFound = false
-  App.shouldExit = false
-  Protocol.reset()
-end
+local UI
+local session
 
 function App.checkCrsfModule()
   if App.crsfModuleChecked then
     return App.crsfModuleFound
   end
   App.crsfModuleChecked = true
-  App.crsfModuleFound = Protocol.hasCrsfModule()
+  App.crsfModuleFound = crsf.hasCrsfModule()
   return App.crsfModuleFound
 end
 
 -- Returns true if device was set, false if no change needed.
 function App.loadDevice(device)
-  if Protocol.setDevice(device) then
+  if session:setDevice(device) then
     Navigation.reset()
     return true
   end
@@ -56,12 +73,12 @@ end
 
 -- Returns true if device was switched.
 function App.switchDevice(deviceId, viewState)
-  local device = Protocol.getDevice(deviceId)
+  local device = session:getDevice(deviceId)
   if not device then
     return false
   end
-  local prevDeviceId = Protocol.deviceId
-  if Protocol.setDevice(device) then
+  local prevDeviceId = session.deviceId
+  if session:setDevice(device) then
     Navigation.openDevice(device.name, prevDeviceId, viewState)
     return true
   end
@@ -71,7 +88,7 @@ end
 -- Navigate into folder.
 function App.enterFolder(folderId, folderName, viewState)
   Navigation.openFolder(folderId, folderName, viewState)
-  Protocol.loadFolderChildren(folderId)
+  session:loadFolder(folderId)
 end
 
 -- Returns navigation entry (or nil).
@@ -79,61 +96,63 @@ function App.goBack()
   return Navigation.goBack()
 end
 
--- Reload at root: switch back to TX device or reload fields + ping.
+-- Reload at root: switch back to TX device or reload fields, then
+-- re-discover so new devices appear.
 function App.reloadAtRoot()
-  if Protocol.deviceId ~= Protocol.CRSF.ADDRESS_TX then
-    local txDevice = Protocol.getDevice(Protocol.CRSF.ADDRESS_TX)
+  if session.deviceId ~= crsf.CONST.ADDRESS_TX then
+    local txDevice = session:getDevice(crsf.CONST.ADDRESS_TX)
     if txDevice then
       App.loadDevice(txDevice)
     end
   else
-    Protocol.allocateFields()
-    Protocol.reloadAllFields()
+    session:reloadAll()
   end
-  Protocol.pingDevices()
+  session:discoverDevices()
 end
 
 -- ============================================================================
--- Mock data for simulator
+-- Session: the tool talks to one device at a time, tracking it fully
 -- ============================================================================
 
-local function setMock()
-  local _, rv = getVersion()
-  if string.sub(rv, -5) ~= "-simu" then
-    return
-  end
-  local mockModule = loadScript("/SCRIPTS/CRSFSimulator/csrfsimulator.lua")
-  if mockModule == nil then
-    return
-  end
-  local mock = mockModule()
-  Protocol.pop = mock.pop
-  Protocol.push = mock.push
-  Protocol.hasCrsfModule = function()
-    return mock.moduleFound
-  end
-end
+session = CRSFSession.new({
+  discovery = true,
+  trackStatus = true,
+  detectV1 = true,
+  preload = true,
+  onDeviceUpdate = function(device, isNew)
+    if device.id == session.deviceId and App.loadDevice(device) then
+      UI.onDeviceLoaded()
+    end
+    if isNew then
+      UI.onNewDevice()
+    end
+  end,
+})
 
 -- ============================================================================
 -- UI loading (deferred to init)
 -- ============================================================================
 
-local UI
+-- Module table, forward-declared so init() can drop itself once it has run.
+local M = {}
 
 local function init()
   local deps = {
     App = App,
     Navigation = Navigation,
-    Protocol = Protocol,
+    session = session,
+    crsf = crsf,
     VERSION = VERSION,
   }
   if useLvgl then
-    UI = loadScript("/SCRIPTS/TOOLS/ExpressLRS/ui/lvgl.lua")(deps)
+    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRS/ui/lvgl.lua", deps)
   else
-    UI = loadScript("/SCRIPTS/TOOLS/ExpressLRS/ui/lcd.lua")(deps)
+    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRS/ui/lcd.lua", deps)
   end
   UI.init()
-  setMock()
+  -- The returned table stays on the standalone Lua stack and pins init(),
+  -- which holds VERSION and useLvgl as upvalues. Drop it.
+  M.init = nil
 end
 
 -- ============================================================================
@@ -161,36 +180,24 @@ local function run(event, touchState)
     return 0
   end
 
-  local targetDevice, anyNewDevice = Protocol.poll()
-  Protocol.tick()
+  session:drain()
+  session:tick()
 
-  if Protocol.elrsV1Detected then
+  if session.v1Detected then
     UI.handleUnsupported()
     return 0
   end
 
-  if targetDevice then
-    if App.loadDevice(targetDevice) then
-      UI.onDeviceLoaded()
-    end
-  end
-  if anyNewDevice then
-    UI.onNewDevice()
-  end
-
   local currentFolder = Navigation.getCurrent()
-  local folderReady = Protocol.isFolderLoaded(currentFolder)
+  local folderReady = session:isFolderLoaded(currentFolder)
   if folderReady and not UI.folderWasReady then
     collectgarbage("collect")
     UI.invalidate()
-    if currentFolder == nil and not Protocol.backgroundLoading then
-      Protocol.startBackgroundLoad()
-    end
   end
   UI.folderWasReady = folderReady
 
-  if Protocol.fieldHiddenChanged then
-    Protocol.fieldHiddenChanged = nil
+  if session.fieldHiddenChanged then
+    session.fieldHiddenChanged = nil
     UI.visibleFields = nil
   end
 
@@ -206,4 +213,7 @@ end
 -- Return
 -- ============================================================================
 
-return { init = init, run = run, useLvgl = useLvgl }
+M.init = init
+M.run = run
+M.useLvgl = useLvgl
+return M

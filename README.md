@@ -19,12 +19,14 @@ When done, your SD card should contain:
 SCRIPTS/
   ELRS/
     crsf.lua                  -- shared CRSF protocol library
+    crsf_params.lua           -- parameter codec (tool, VTX Admin)
+    crsf_session.lua          -- stateful parameter client (tool, VTX Admin)
+    crsf_elrsinfo.lua         -- TX module info state (telemetry widget)
+    shim.lua                  -- BW compatibility shim
   TOOLS/
     ExpressLRS/
       main.lua                -- entry point
-      protocol.lua            -- CRSF protocol handling
       navigation.lua          -- folder navigation
-      shim.lua                -- BW compatibility shim
       ui/
         lvgl.lua              -- color LCD UI (LVGL)
         lcd.lua               -- black & white LCD UI
@@ -42,7 +44,7 @@ WIDGETS/
       ...
 ```
 
-The shared library `SCRIPTS/ELRS/crsf.lua` is required by both widgets.
+The shared library `SCRIPTS/ELRS/` is required by the configuration tool and both widgets.
 
 ### Install with edgetx-cli
 
@@ -76,7 +78,7 @@ The telemetry widget (`WIDGETS/ELRSTelemetry/`) displays real-time link statisti
 
 ## VTX Administrator Widget
 
-The VTX Administrator widget (`WIDGETS/ELRSVTXAdmin/`) provides control over your video transmitter settings -- band, channel, power level, and pit mode -- directly from your radio telemetry screen. It also supports 6POS quick change for rapid VTX channel switching via a 6POS switch.
+The VTX Administrator widget (`WIDGETS/ELRSVTXAdmin/`) provides control over your video transmitter settings -- band, channel, power level, and pit mode -- directly from your radio telemetry screen. It also supports 6POS quick change for rapid VTX channel switching via a 6POS switch. Presets are organised into six collections selected in the widget's editor, so your home field and a race event can each keep their own set of channels.
 
 <img src="screenshots/widget_vtxadmin_fullscreen.png" width="472" alt="VTX Administrator Widget">
 

@@ -7,10 +7,10 @@ local deps = ...
 
 local App = deps.App
 local Navigation = deps.Navigation
-local Protocol = deps.Protocol
+local session = deps.session
+local crsf = deps.crsf
 local VERSION = deps.VERSION
 
-local VERSION_CHECK_ENABLED = true
 local versionCheckResult = nil
 
 local function checkEdgeTxVersion()
@@ -31,6 +31,10 @@ end
 -- UI state
 -- ============================================================================
 
+-- Title warning flash half-period, in 10 ms ticks. Also paces the idle page
+-- repaint (the flash tick sets forceRedraw), so halving it doubles that rate.
+local WARN_FLASH_PERIOD = 100
+
 local UI = {
   -- Cursor/selection state (owned entirely by this module)
   lineIndex = 1,
@@ -40,7 +44,8 @@ local UI = {
   -- Visible field list (rebuilt on invalidate)
   visibleFields = nil,
 
-  -- Layout constants (set in UI.init)
+  -- Layout constants for 128x64; UI.init widens COL2 at 212px wide and
+  -- raises maxLineIndex at 96px tall
   COL1 = 0,
   COL2 = 70,
   maxLineIndex = 6,
@@ -50,13 +55,14 @@ local UI = {
   -- Redraw state
   forceRedraw = true,
   folderWasReady = false,
+  wasLoading = false,
 
   -- Warning flashing
   titleShowWarn = nil,
-  titleShowWarnTimeout = 100,
+  titleShowWarnTimeout = 0,
+  titleWarnFlags = nil, -- last flags byte the flash phase was anchored to
 
   -- Warning dismissal (model mismatch)
-  warningDismissed = false,
   warningDismissedAt = nil,
 
   -- Command popup spinner
@@ -70,21 +76,12 @@ local UI = {
 function UI.init()
   if LCD_W == 212 then
     UI.COL2 = 110
-  else
-    UI.COL2 = 70
   end
   if LCD_H == 96 then
     UI.maxLineIndex = 9
-  else
-    UI.maxLineIndex = 6
   end
-  UI.COL1 = 0
-  UI.textYoffset = 3
-  UI.textSize = 8
 
-  if VERSION_CHECK_ENABLED then
-    versionCheckResult = checkEdgeTxVersion()
-  end
+  versionCheckResult = checkEdgeTxVersion()
 end
 
 -- ============================================================================
@@ -92,7 +89,7 @@ end
 -- ============================================================================
 
 function UI.preCheck(event)
-  if versionCheckResult == false then
+  if not versionCheckResult then
     UI.drawAlert("Unsupported", {
       "Requires EdgeTX:",
       "- 2.11.6 or later",
@@ -166,31 +163,29 @@ end
 -- ============================================================================
 
 function UI.render(event, _touchState)
-  -- Warning flashing timer
+  -- Warning flash: any flags change re-anchors the phase, so a new warning
+  -- starts on its visible half and a cleared one disappears at once
   local time = getTime()
-  if time > UI.titleShowWarnTimeout then
-    UI.titleShowWarn = (Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
-    UI.titleShowWarnTimeout = time + 100
+  local flags = session.status.flags
+  if flags ~= UI.titleWarnFlags then
+    UI.titleWarnFlags = flags
+    UI.titleShowWarn = (flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK) or nil
+    UI.titleShowWarnTimeout = time + WARN_FLASH_PERIOD
+    UI.forceRedraw = true
+  elseif time > UI.titleShowWarnTimeout then
+    UI.titleShowWarn = (flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
+    UI.titleShowWarnTimeout = time + WARN_FLASH_PERIOD
     UI.forceRedraw = true
   end
 
   -- Warning dismissal cooldown (60s before re-showing)
-  if UI.warningDismissedAt then
-    if Protocol.elrsFlags <= Protocol.CRSF.ELRS_FLAGS_STATUS_MASK then
-      if time - UI.warningDismissedAt > 6000 then
-        UI.warningDismissed = false
-        UI.warningDismissedAt = nil
-      end
-    elseif UI.warningDismissed and time - UI.warningDismissedAt > 6000 then
-      UI.warningDismissed = false
-      UI.warningDismissedAt = nil
-    end
+  if UI.warningDismissedAt and time - UI.warningDismissedAt > 6000 then
+    UI.warningDismissedAt = nil
   end
 
   -- Model mismatch alert (full-screen, blocks normal rendering)
-  if Protocol.isModelMismatch() and not UI.warningDismissed then
+  if session.status.modelMismatch and not UI.warningDismissedAt then
     if event == EVT_VIRTUAL_ENTER then
-      UI.warningDismissed = true
       UI.warningDismissedAt = getTime()
       UI.forceRedraw = true
       return
@@ -207,13 +202,18 @@ function UI.render(event, _touchState)
     return
   end
 
-  -- Force redraw during loading to show progress bar
-  if #Protocol.loadQueue > 0 then
+  -- Force redraw while the queue is loading, to show the progress bar, and once
+  -- more on the frame it empties. poll() pops the last entry before we get here,
+  -- so without the trailing edge the response that completes a reload never
+  -- reaches the screen and the page waits for the next event or warn tick.
+  local loading = session:isLoading()
+  if loading or UI.wasLoading then
     UI.forceRedraw = true
   end
+  UI.wasLoading = loading
 
   -- Render: command popup or normal page
-  if Protocol.fieldPopup ~= nil then
+  if session.command ~= nil then
     UI.drawPopup(event)
   elseif event ~= 0 or UI.forceRedraw or UI.edit then
     UI.drawPage(event)
@@ -273,9 +273,9 @@ function UI.handleBack()
       UI.lineIndex = entry.li or 1
       UI.pageOffset = entry.po or 0
       if entry.type == Navigation.TYPE_DEVICE and entry.prevDeviceId then
-        local prevDevice = Protocol.getDevice(entry.prevDeviceId)
+        local prevDevice = session:getDevice(entry.prevDeviceId)
         if prevDevice then
-          Protocol.setDevice(prevDevice)
+          session:setDevice(prevDevice)
         end
       end
     end
@@ -292,21 +292,21 @@ function UI.buildVisibleFields()
   local vf = {}
 
   if currentFolder == Navigation.FOLDER_OTHER_DEVICES then
-    for _, device in ipairs(Protocol.devices) do
-      if device.id ~= Protocol.deviceId then
-        vf[#vf + 1] = { id = device.id, name = device.name, type = Protocol.CRSF.DEVICE }
+    for _, device in ipairs(session.devices) do
+      if device.id ~= session.deviceId then
+        vf[#vf + 1] = { id = device.id, name = device.name, type = App.DEVICE }
       end
     end
   else
-    local fields = Protocol.getFieldsInFolder(currentFolder)
+    local fields = session:fieldsInFolder(currentFolder)
     for _, field in ipairs(fields) do
       if not field.hidden then
         vf[#vf + 1] = field
       end
     end
 
-    if currentFolder == nil and #Protocol.devices > 1 and not Navigation.hasDeviceEntry() then
-      vf[#vf + 1] = { name = "Other Devices", type = Protocol.CRSF.DEVICE_FOLDER }
+    if currentFolder == nil and #session.devices > 1 and not Navigation.hasDeviceEntry() then
+      vf[#vf + 1] = { name = "Other Devices", type = App.DEVICE_FOLDER }
     end
   end
 
@@ -353,11 +353,11 @@ function UI.incrField(step)
     return
   end
   local min, max = 0, 0
-  if field.type <= Protocol.CRSF.FLOAT then
+  if field.type <= crsf.CONST.FIELD_FLOAT then
     min = field.min or 0
     max = field.max or 0
     step = (field.step or 1) * step
-  elseif field.type == Protocol.CRSF.TEXT_SELECTION then
+  elseif field.type == crsf.CONST.FIELD_TEXT_SELECTION then
     min = 0
     max = #field.values - 1
   end
@@ -384,9 +384,6 @@ end
 
 function UI.selectField(step)
   local count = UI.getSelectableCount()
-  if count == 0 then
-    return
-  end
   local fieldCount = UI.getFieldCount()
   local newLineIndex = UI.lineIndex
   repeat
@@ -442,18 +439,18 @@ local function fieldCommandDisplay(field, y, attr)
 end
 
 local displayHandlers = {}
-displayHandlers[Protocol.CRSF.UINT8] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.INT8] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.UINT16] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.INT16] = fieldIntDisplay
-displayHandlers[Protocol.CRSF.FLOAT] = fieldFloatDisplay
-displayHandlers[Protocol.CRSF.TEXT_SELECTION] = fieldTextSelDisplay
-displayHandlers[Protocol.CRSF.STRING] = fieldStringDisplay
-displayHandlers[Protocol.CRSF.INFO] = fieldStringDisplay
-displayHandlers[Protocol.CRSF.FOLDER] = fieldFolderDisplay
-displayHandlers[Protocol.CRSF.COMMAND] = fieldCommandDisplay
-displayHandlers[Protocol.CRSF.DEVICE] = fieldCommandDisplay
-displayHandlers[Protocol.CRSF.DEVICE_FOLDER] = fieldFolderDisplay
+displayHandlers[crsf.CONST.FIELD_UINT8] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_INT8] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_UINT16] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_INT16] = fieldIntDisplay
+displayHandlers[crsf.CONST.FIELD_FLOAT] = fieldFloatDisplay
+displayHandlers[crsf.CONST.FIELD_TEXT_SELECTION] = fieldTextSelDisplay
+displayHandlers[crsf.CONST.FIELD_STRING] = fieldStringDisplay
+displayHandlers[crsf.CONST.FIELD_INFO] = fieldStringDisplay
+displayHandlers[crsf.CONST.FIELD_FOLDER] = fieldFolderDisplay
+displayHandlers[crsf.CONST.FIELD_COMMAND] = fieldCommandDisplay
+displayHandlers[App.DEVICE] = fieldCommandDisplay
+displayHandlers[App.DEVICE_FOLDER] = fieldFolderDisplay
 
 -- ============================================================================
 -- Title bar drawing
@@ -462,12 +459,13 @@ displayHandlers[Protocol.CRSF.DEVICE_FOLDER] = fieldFolderDisplay
 function UI.drawTitle()
   local barHeight = 9
   local goodBadPkt = ""
-  if Protocol.receivedPackets then
-    local state = Protocol.hasTelemetry() and "C" or "-"
-    goodBadPkt = string.format("%u/%u   %s", Protocol.lostPackets, Protocol.receivedPackets, state)
+  local status = session.status
+  if status.receivedPackets then
+    local state = status.connected and "C" or "-"
+    goodBadPkt = string.format("%u/%u   %s", status.lostPackets, status.receivedPackets, state)
   end
 
-  local loaded, total = Protocol.getFolderLoadProgress(Navigation.getCurrent())
+  local loaded, total = session:folderLoadProgress(Navigation.getCurrent())
   if not UI.titleShowWarn then
     lcd.drawText(LCD_W - 1, 1, goodBadPkt, RIGHT)
     lcd.drawLine(LCD_W - 10, 0, LCD_W - 10, barHeight - 1, SOLID, INVERS)
@@ -479,9 +477,9 @@ function UI.drawTitle()
   else
     lcd.drawFilledRectangle(0, 0, LCD_W, barHeight, GREY_DEFAULT)
     if UI.titleShowWarn then
-      lcd.drawText(UI.COL1, 1, Protocol.elrsFlagsInfo, INVERS)
+      lcd.drawText(UI.COL1, 1, session.status.warning, INVERS)
     else
-      lcd.drawText(UI.COL1, 1, Protocol.deviceName or "Searching...", INVERS)
+      lcd.drawText(UI.COL1, 1, session.deviceName or "Searching...", INVERS)
     end
   end
 end
@@ -492,7 +490,7 @@ end
 
 function UI.drawWarning()
   lcd.drawText(UI.COL1, UI.textSize * 2, "Error:")
-  lcd.drawText(UI.COL1, UI.textSize * 3, Protocol.elrsFlagsInfo)
+  lcd.drawText(UI.COL1, UI.textSize * 3, session.status.warning)
   lcd.drawText(LCD_W / 2, UI.textSize * 5, "[OK]", BLINK + INVERS + CENTER)
 end
 
@@ -501,24 +499,19 @@ end
 -- ============================================================================
 
 function UI.handleEvent(event)
-  if UI.getSelectableCount() == 0 then
-    return
-  end
-
   if event == EVT_VIRTUAL_EXIT then
     if UI.edit then
       UI.edit = nil
       local field = UI.getField(UI.lineIndex)
       if field and field.id then
-        Protocol.reloadCurField(field)
+        session:reloadField(field)
       end
     else
       UI.handleBack()
     end
   elseif event == EVT_VIRTUAL_ENTER then
-    if Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_WARNING_THRESHOLD then
-      Protocol.elrsFlags = 0
-      Protocol.push(Protocol.CRSF.FRAMETYPE_PARAMETER_WRITE, { Protocol.deviceId, Protocol.handsetId, 0x2E, 0x00 })
+    if session.status.flags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
+      session:suppressCriticalErrors()
     elseif UI.isOnBackExit() then
       if Navigation.isAtRoot() then
         App.shouldExit = true
@@ -530,19 +523,18 @@ function UI.handleEvent(event)
       if field and field.name then
         local ft = field.type
 
-        if ft == Protocol.CRSF.FOLDER then
+        if ft == crsf.CONST.FIELD_FOLDER then
           UI.openFolder(field.id, field.name)
-        elseif ft == Protocol.CRSF.DEVICE_FOLDER then
+        elseif ft == App.DEVICE_FOLDER then
           UI.openFolder(Navigation.FOLDER_OTHER_DEVICES, "Other Devices")
-        elseif ft == Protocol.CRSF.DEVICE then
+        elseif ft == App.DEVICE then
           UI.switchDevice(field.id)
-        elseif ft == Protocol.CRSF.COMMAND then
-          Protocol.handleCommandSave(field)
-        elseif not field.disabled and ft <= Protocol.CRSF.TEXT_SELECTION then
+        elseif ft == crsf.CONST.FIELD_COMMAND then
+          session:execCommand(field)
+        elseif not field.disabled and ft <= crsf.CONST.FIELD_TEXT_SELECTION then
           UI.edit = not UI.edit
           if not UI.edit then
-            Protocol.fieldIntSave(field)
-            Protocol.reloadRelatedFields(field)
+            session:writeField(field)
           end
         end
       end
@@ -572,7 +564,7 @@ function UI.drawPage(event)
   lcd.clear()
   UI.drawTitle()
 
-  if Protocol.elrsFlags > Protocol.CRSF.ELRS_FLAGS_WARNING_THRESHOLD then
+  if session.status.flags > crsf.CONST.ELRS_FLAGS_WARNING_THRESHOLD then
     UI.drawWarning()
   else
     local totalCount = UI.getSelectableCount()
@@ -591,7 +583,7 @@ function UI.drawPage(event)
         local field = UI.getField(idx)
         if field and field.name then
           local ft = field.type
-          if ft < Protocol.CRSF.FOLDER or ft == Protocol.CRSF.INFO then
+          if ft < crsf.CONST.FIELD_FOLDER or ft == crsf.CONST.FIELD_INFO then
             lcd.drawText(UI.COL1, yPos, field.name, 0)
           end
           local displayFn = displayHandlers[ft]
@@ -609,37 +601,35 @@ end
 -- ============================================================================
 
 function UI.drawPopup(event)
+  local command = session.command
   if event == EVT_VIRTUAL_EXIT then
-    Protocol.push(
-      Protocol.CRSF.FRAMETYPE_PARAMETER_WRITE,
-      { Protocol.deviceId, Protocol.handsetId, Protocol.fieldPopup.id, Protocol.CRSF.CMD_CANCEL }
-    )
-    Protocol.fieldTimeout = getTime() + 200
+    local status = command.status
+    if status ~= crsf.CONST.CMD_ASKCONFIRM and status ~= crsf.CONST.CMD_EXECUTING then
+      -- No dialog is on screen yet (e.g. CMD_CLICK just went out): request the
+      -- cancel but keep the popup up until the device reports CMD_IDLE. The
+      -- dialog branches below handle their own cancel via popupConfirmation.
+      session:requestCancelCommand()
+    end
   end
 
-  if Protocol.fieldPopup.status == Protocol.CRSF.CMD_ASKCONFIRM then
-    local result = popupConfirmation(Protocol.fieldPopup.info or "", "PRESS [OK] to confirm", event)
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
+  if command.status == crsf.CONST.CMD_ASKCONFIRM then
+    local result = popupConfirmation(command.info or "", "PRESS [OK] to confirm", event)
     if result == "OK" then
-      Protocol.commandConfirm()
+      session:confirmCommand()
     elseif result == "CANCEL" then
-      Protocol.fieldPopup = nil
+      session:cancelCommand()
     end
-  elseif Protocol.fieldPopup.status == Protocol.CRSF.CMD_EXECUTING then
-    if Protocol.fieldChunk == 0 then
+  elseif command.status == crsf.CONST.CMD_EXECUTING then
+    if not session:isReceivingChunks() then
       UI.commandRunningIndicator = (UI.commandRunningIndicator % 4) + 1
     end
     local result = popupConfirmation(
-      (Protocol.fieldPopup.info or "")
-        .. " ["
-        .. string.sub("|/-\\", UI.commandRunningIndicator, UI.commandRunningIndicator)
-        .. "]",
+      (command.info or "") .. " [" .. string.sub("|/-\\", UI.commandRunningIndicator, UI.commandRunningIndicator) .. "]",
       "Press [RTN] to exit",
       event
     )
-    Protocol.fieldPopup.lastStatus = Protocol.fieldPopup.status
     if result == "CANCEL" then
-      Protocol.commandCancel()
+      session:cancelCommand()
     end
   end
 end

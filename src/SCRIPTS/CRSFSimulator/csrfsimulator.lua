@@ -9,6 +9,10 @@
 -- Returns a table with { pop, push, moduleFound } fields.
 -- ============================================================================
 
+-- B&W radios ship without the table library, so every table.* call here goes
+-- through the simulator's own compat layer.
+local shim = loadScript("/SCRIPTS/CRSFSimulator/shim.lua")()
+
 -- ============================================================================
 -- Configuration: Change scenario here to test different states
 -- ============================================================================
@@ -23,20 +27,42 @@
 --                    reconnect without restarting the script.
 --   "model_mismatch" TX + RX connected but with Model ID mismatch flag set.
 --                    Triggers the Model Mismatch warning dialog.
+--   "mismatch_cycle" Model-mismatch link that drops and returns (~10 s up,
+--                    ~5 s down, forever). Exercises the per-connection status
+--                    poll latch: one ELRS_STATUS request per connected phase,
+--                    and the mismatch warning must clear while the link is down.
+--   "weak_link"      TX + RX connected on a marginal link (RQly ~60, RSSI
+--                    ~-85 dBm). Both the model-match poll and the VTX Admin
+--                    folder poll must stay quiet here.
 --   "armed"          TX + RX connected with the "is Armed" warning flag set.
 --                    Shows armed warning in subtitle.
+--   "single_antenna" RX with a single RF path: 2RSS pinned to 0, so the
+--                    widgets report no diversity.
 --   "slow_loading"   TX + RX connected but PARAMETER_READ responses are
 --                    delayed by ~2 seconds each. Tests how the UI renders
 --                    during slow field discovery (e.g. "Loading..." states
 --                    in minimized widgets, full-screen subtitle updates).
 --   "no_module"      No CRSF module found at all. Triggers the "No Module
 --                    Found" error dialog immediately.
+--   "critical_error" TX + RX connected but the module reports a critical
+--                    error (baud rate too low). Exercises the warning screen
+--                    and the suppress-critical-errors write (field id 0x2E),
+--                    which clears the flags until the script restarts.
+--
+-- In every connected scenario the armed flag additionally follows CH5 (AUX1,
+-- the ELRS arm channel): drive it high to arm mid-session, low to disarm.
 local config = {
   scenario = "normal",
+  -- Largest frame the handset link carries (CRSF_MAX_PACKET_LEN on a fast
+  -- link). PARAMETER_SETTINGS_ENTRY payloads larger than maxPacketBytes - 8
+  -- are chunked exactly as CRSFEndpoint::sendParameter does. Real firmware
+  -- shrinks this on slow baud rates (CRSFHandset::adjustMaxPacketSize, floor
+  -- 15) -- lower it here to emulate a slow link and force deeper chunking.
+  maxPacketBytes = 64,
 }
 
 -- ============================================================================
--- CRSF Protocol Constants (local copies, independent of Protocol.CRSF)
+-- CRSF Protocol Constants (local copies, independent of the shared library)
 -- ============================================================================
 
 local CRSF = {
@@ -78,6 +104,10 @@ local CRSF = {
   CMD_CONFIRMED = 4,
   CMD_CANCEL = 5,
   CMD_QUERY = 6,
+
+  -- Pseudo-field id: a PARAMETER_WRITE to this id calls supressCriticalErrors()
+  -- in TXModuleEndpoint.cpp (the firmware uses the bare 0x2E literal).
+  FIELD_ID_SUPPRESS_CRITICAL_ERRORS = 0x2E,
 }
 
 -- ============================================================================
@@ -109,41 +139,28 @@ local pwmChannelConfig = {
 }
 
 -- ============================================================================
--- FIFO Packet Queue
+-- Packet delivery: a frame log with per-consumer cursors
+--
+-- Real firmware replicates every incoming frame into each widget instance's
+-- private queue, so every consumer sees every frame. The mock emulates that:
+-- frames append to a shared log, and each consumer (the identity passed to
+-- pop()) advances its own cursor over it. A new consumer starts at the
+-- current tail, matching the firmware's lazy queue creation. Each delivery
+-- hands out a fresh copy of the data table -- consumers decode in place,
+-- exactly as they may with the firmware's per-queue copies.
 -- ============================================================================
 
-local packetQueue = {}
-local queueHead = 1
+local frameLog = {}
+local logTotal = 0
+local logPruned = 0
+local cursors = setmetatable({}, { __mode = "k" })
+local defaultConsumer = {}
 
 -- Deferred packets simulate OTA relay delay (e.g., RX DEVICE_INFO arriving
 -- later than TX DEVICE_INFO). They are delivered in the NEXT poll cycle,
 -- after the main queue has been drained and a nil has been returned.
 local deferredQueue = {}
 local deferredReady = false
-
--- BW/FreedomTX compatibility: provide a local analogue to table.remove().
--- Supports remove(tbl) and remove(tbl, idx) semantics.
-local function tableRemove(tbl, idx)
-  if table and table.remove then
-    return table.remove(tbl, idx)
-  end
-
-  local n = #tbl
-  local pos = idx
-  if pos == nil then
-    pos = n
-  end
-  if pos < 1 or pos > n then
-    return nil
-  end
-
-  local removed = tbl[pos]
-  for i = pos, n - 1 do
-    tbl[i] = tbl[i + 1]
-  end
-  tbl[n] = nil
-  return removed
-end
 
 -- Slow loading scenario: time-delayed response queue.
 -- PARAMETER_READ responses are held here until their delivery time, then
@@ -161,32 +178,63 @@ local FOLDER_NAMES_UPDATE_TICKS = 2 -- 20ms delay
 local folderNamesReadyAt = 0
 local folderNamesDevice = nil
 
+-- Drop log entries every cursor has passed
+local function pruneLog()
+  local minCursor = logTotal
+  for _, c in pairs(cursors) do
+    if c < minCursor then
+      minCursor = c
+    end
+  end
+  for i = logPruned + 1, minCursor do
+    frameLog[i] = nil
+  end
+  logPruned = minCursor
+end
+
 local function queuePush(command, data)
-  packetQueue[#packetQueue + 1] = { command = command, data = data }
+  logTotal = logTotal + 1
+  frameLog[logTotal] = { command = command, data = data }
+  pruneLog()
 end
 
 local function queuePushDeferred(command, data)
   deferredQueue[#deferredQueue + 1] = { command = command, data = data }
 end
 
-local function queuePop()
-  -- Serve from main queue first
-  if queueHead <= #packetQueue then
-    local pkt = packetQueue[queueHead]
-    queueHead = queueHead + 1
-    deferredReady = false
-    return pkt.command, pkt.data
+-- Deliver the frame at index to a consumer as a fresh data-table copy
+local function deliver(consumer, index)
+  cursors[consumer] = index
+  local pkt = frameLog[index]
+  local data = {}
+  for i = 1, #pkt.data do
+    data[i] = pkt.data[i]
+  end
+  return pkt.command, data
+end
+
+local function queuePop(consumer)
+  consumer = consumer or defaultConsumer
+  local cursor = cursors[consumer]
+  if cursor == nil then
+    cursor = logTotal
+    cursors[consumer] = cursor
   end
 
-  -- Main queue empty, reset it
-  packetQueue = {}
-  queueHead = 1
+  -- Serve the next unread log entry first
+  if cursor < logTotal then
+    deferredReady = false
+    return deliver(consumer, cursor + 1)
+  end
 
-  -- Serve deferred packets only after a nil has been returned (next poll cycle)
+  -- At the tail: serve deferred packets only after a nil has been returned
+  -- (next poll cycle). Promotion appends to the log, so every consumer
+  -- sees the deferred frame.
   if deferredReady and #deferredQueue > 0 then
-    local pkt = tableRemove(deferredQueue, 1)
+    local pkt = shim.tableRemove(deferredQueue, 1)
     ---@diagnostic disable-next-line: need-check-nil
-    return pkt.command, pkt.data
+    queuePush(pkt.command, pkt.data)
+    return deliver(consumer, cursors[consumer] + 1)
   end
 
   -- Mark deferred as ready for the next poll cycle
@@ -248,13 +296,17 @@ local function encodeDeviceInfo(device, destAddr)
 end
 
 --- Encode a PARAMETER_SETTINGS_ENTRY packet (frame type 0x2B)
--- Encodes one chunk of a parameter. Currently only single-chunk (chunk 0) supported.
+-- Encodes one chunk of a parameter, chunking at the handset link's frame
+-- limit exactly as CRSFEndpoint::sendParameter does: payloads larger than
+-- config.maxPacketBytes - 8 are sliced, each frame repeating the
+-- [dest, src, fieldId, chunksRemain] header with the countdown in
+-- chunksRemain.
 -- @param device  the device table (for id)
 -- @param param   the parameter definition table
--- @param chunk   chunk index (0 for single-chunk params)
+-- @param chunk   requested chunk index (0-based)
 -- @param destAddr  destination address
 -- @return data table suitable for queuePush(FRAMETYPE_PARAMETER_SETTINGS_ENTRY, data)
-local function encodeParameterEntry(device, param, _chunk, destAddr)
+local function encodeParameterEntry(device, param, chunk, destAddr)
   local data = {}
   data[1] = destAddr or CRSF.ADDRESS_HANDSET
   data[2] = device.id
@@ -362,7 +414,27 @@ local function encodeParameterEntry(device, param, _chunk, destAddr)
     appendString(data, param.units or "")
   end
 
-  return data
+  -- Chunking per CRSFEndpoint::sendParameter: the payload from the parent
+  -- byte onward is sliced into (maxPacketBytes - 8)-byte chunks -- 6 bytes of
+  -- CRSF header/CRC plus the FieldId + ChunksRemain pair repeated per frame.
+  local chunkMax = config.maxPacketBytes - 8
+  local body = {}
+  for i = 5, #data do
+    body[#body + 1] = data[i]
+  end
+  if #body <= chunkMax then
+    return data
+  end
+  local totalChunks = math.ceil(#body / chunkMax)
+  local k = chunk or 0
+  if k >= totalChunks then
+    k = totalChunks - 1
+  end
+  local out = { data[1], data[2], data[3], totalChunks - 1 - k }
+  for i = k * chunkMax + 1, math.min((k + 1) * chunkMax, #body) do
+    out[#out + 1] = body[i]
+  end
+  return out
 end
 
 --- Encode an ELRS_STATUS packet (frame type 0x2E)
@@ -391,13 +463,24 @@ end
 -- Matches TXModuleParameters.cpp parameter structure
 -- ============================================================================
 
+--- STR_LUA_ALLAUX_UPDOWN from CRSFParameters.h: "AUX1<up>;AUX1<down>;...;AUX10<down>",
+--- where \192 and \193 are the ExpressLRS up/down arrow glyphs.
+local ALLAUX_UPDOWN = (function()
+  local opts = {}
+  for i = 1, 10 do
+    opts[#opts + 1] = shim.tableConcat({ "AUX", i, "\192" })
+    opts[#opts + 1] = shim.tableConcat({ "AUX", i, "\193" })
+  end
+  return shim.tableConcat(opts, ";")
+end)()
+
 local txDevice = {
   id = CRSF.ADDRESS_TX,
   name = "TX16S MK3",
   serialNo = CRSF.ELRS_SERIAL_ID,
   hwVer = 0,
   swVer = 0x00030500, -- 3.5.0
-  fieldCount = 24, -- total parameter count
+  fieldCount = 25, -- total parameter count
   params = {
     {
       id = 1,
@@ -501,7 +584,7 @@ local txDevice = {
       parent = 10,
       type = CRSF.TEXT_SELECTION,
       name = "Pitmode",
-      options = "Off;On",
+      options = shim.tableConcat({ "Off;On;", ALLAUX_UPDOWN }),
       value = 0,
       units = "",
     },
@@ -588,6 +671,20 @@ local txDevice = {
 
     -- Version + regulatory domain (name = version+domain, value = commit hash)
     { id = 23, parent = 0, type = CRSF.INFO, name = "3.5.0 ISM2G4", value = "825ed8" },
+
+    -- Signed integer field (INT8): exercises sign extension on load and the
+    -- two's-complement re-encode on save. Not a real TX parameter.
+    {
+      id = 25,
+      parent = 0,
+      type = CRSF.INT8,
+      name = "RF Gain",
+      value = -3,
+      min = -10,
+      max = 10,
+      default = 0,
+      units = "dB",
+    },
   },
 }
 
@@ -598,7 +695,7 @@ local txDevice = {
 
 local rxDevice = {
   id = CRSF.ADDRESS_RX,
-  name = "ELRS 2400RX",
+  name = "Bob 2400RX",
   serialNo = CRSF.ELRS_SERIAL_ID,
   hwVer = 0,
   swVer = 0x00030500, -- 3.5.0
@@ -834,8 +931,14 @@ end
 --- Update the dynName field on TX Power and VTX Administrator folders
 -- so the simulator matches real firmware behavior where folder names show
 -- a summary of the current settings in parentheses.
+-- Only the TX module builds these summaries; receiver parameters reuse the
+-- same ids for unrelated settings, so the ids below are meaningless there.
 -- @param device  the device table whose params to update
 local function updateFolderNames(device)
+  if device.id ~= CRSF.ADDRESS_TX then
+    return
+  end
+
   -- TX Power folder (id=6): children Max Power (id=7), Dynamic (id=8)
   local txPwrFolder = findParam(device, 6)
   local maxPower = findParam(device, 7)
@@ -1011,25 +1114,58 @@ end
 --   bit 4: LUA_FLAG_WARNING1
 --   bit 5: LUA_FLAG_ERROR_CONNECTED (critical)
 --   bit 6: LUA_FLAG_ERROR_BAUDRATE (critical)
-local function getElrsFlags()
-  if config.scenario == "reconnect" then
-    return isRxAvailable() and 0x01 or 0x00
-  elseif config.scenario == "model_mismatch" then
-    return 0x05 -- connected + model mismatch
-  elseif config.scenario == "armed" then
-    return 0x09 -- connected + armed
-  elseif config.scenario == "normal" or config.scenario == "slow_loading" then
-    return 0x01 -- connected
-  else
-    return 0x00 -- no telemetry
-  end
+
+-- Set by a PARAMETER_WRITE to pseudo-field 0x2E (TXModuleEndpoint.cpp
+-- supressCriticalErrors): critical flag bits stay cleared afterwards.
+local criticalErrorsSuppressed = false
+
+-- CH5 is AUX1, the ELRS arm channel: armed while it is high.
+-- getOutputValue is 0-based, so 4 reads CH5.
+local function isArmed()
+  return (getOutputValue(4) or 0) > 0
 end
 
-local function getElrsFlagsInfo()
-  if config.scenario == "model_mismatch" then
-    return "Model Mismatch"
+local function getElrsFlags()
+  local flags
+  if config.scenario == "reconnect" then
+    flags = isRxAvailable() and 0x01 or 0x00
+  elseif config.scenario == "model_mismatch" or config.scenario == "mismatch_cycle" then
+    flags = 0x05 -- connected + model mismatch
   elseif config.scenario == "armed" then
+    flags = 0x09 -- connected + armed
+  elseif config.scenario == "critical_error" then
+    if criticalErrorsSuppressed then
+      flags = 0x01 -- connected, critical bits suppressed
+    else
+      flags = 0x41 -- connected + baud rate error (critical)
+    end
+  elseif
+    config.scenario == "normal"
+    or config.scenario == "slow_loading"
+    or config.scenario == "single_antenna"
+    or config.scenario == "weak_link"
+  then
+    flags = 0x01 -- connected
+  else
+    flags = 0x00 -- no telemetry
+  end
+  -- Sampled per status answer while connected, like handset->IsArmed()
+  -- in sendELRSstatus()
+  if bit32.btest(flags, 0x01) and isArmed() then
+    flags = bit32.bor(flags, 0x08)
+  end
+  return flags
+end
+
+-- Highest set bit wins, matching the messages[] scan (7..0) in
+-- sendELRSstatus(); the suppressed critical bit is already off in flags.
+local function getElrsFlagsInfo(flags)
+  if bit32.btest(flags, 0x40) then
+    return "Baud rate too low"
+  elseif bit32.btest(flags, 0x08) then
     return "[ ! Armed ! ]"
+  elseif bit32.btest(flags, 0x04) then
+    return "Model Mismatch"
   end
   return ""
 end
@@ -1117,17 +1253,34 @@ local function mockPush(command, data)
     startTime = getTime()
   end
 
-  if command == CRSF.FRAMETYPE_DEVICE_PING then
-    local destAddr = data[2] or CRSF.ADDRESS_HANDSET
+  -- One line per pushed frame, so a scenario run's wire traffic can be counted
+  -- from the log (steady-state silence is an empty grep).
+  print(shim.tableConcat({
+    "CRSFSIM push t=",
+    getTime(),
+    " cmd=",
+    command,
+    " dst=",
+    data and data[1] or "-",
+    " field=",
+    data and data[3] or "-",
+  }))
 
-    -- TX module responds immediately (local to handset)
-    queuePush(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(txDevice, destAddr))
+  if command == CRSF.FRAMETYPE_DEVICE_PING then
+    local dest = data[1] or CRSF.ADDRESS_BROADCAST
+    local replyTo = data[2] or CRSF.ADDRESS_HANDSET
+
+    -- Frames addressed to the TX module are answered on the handset UART and
+    -- never forwarded over the air, so only a broadcast ping reaches the RX.
+    if dest == CRSF.ADDRESS_BROADCAST or dest == CRSF.ADDRESS_TX then
+      queuePush(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(txDevice, replyTo))
+    end
 
     -- RX device responds with delay (relayed over air link)
     -- Uses deferred delivery so it arrives in the next poll cycle,
     -- after the TX DEVICE_INFO has been processed
-    if isRxAvailable() then
-      queuePushDeferred(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(rxDevice, destAddr))
+    if dest == CRSF.ADDRESS_BROADCAST and isRxAvailable() then
+      queuePushDeferred(CRSF.FRAMETYPE_DEVICE_INFO, encodeDeviceInfo(rxDevice, replyTo))
     end
     return true
   elseif command == CRSF.FRAMETYPE_PARAMETER_READ then
@@ -1179,9 +1332,15 @@ local function mockPush(command, data)
     -- Special case: ELRS status request (fieldId == 0)
     if fieldId == 0 then
       local flags = getElrsFlags()
-      local flagsInfo = getElrsFlagsInfo()
+      local flagsInfo = getElrsFlagsInfo(flags)
       local destAddr = data[2] or CRSF.ADDRESS_HANDSET
       queuePush(CRSF.FRAMETYPE_ELRS_STATUS, encodeElrsStatus(deviceId, destAddr, 0, 250, flags, flagsInfo))
+      return true
+    end
+
+    -- Special case: suppress-critical-errors write (TXModuleEndpoint.cpp).
+    if fieldId == CRSF.FIELD_ID_SUPPRESS_CRITICAL_ERRORS then
+      criticalErrorsSuppressed = true
       return true
     end
 
@@ -1205,7 +1364,7 @@ local function mockPush(command, data)
               chars[#chars + 1] = data[i]
               i = i + 1
             end
-            param.value = (#chars > 0) and string.char(table.unpack(chars)) or ""
+            param.value = shim.charsToString(chars)
             -- Bind Phrase: mirror into the Phrase Echo INFO sibling so the UI only
             -- reflects the change if the STRING write reloads sibling fields.
             if param.id == 20 then
@@ -1229,8 +1388,23 @@ local function mockPush(command, data)
               v = v - 0x10000
             end
             param.value = v
+          elseif t == CRSF.INT8 then
+            local v = writeValue or 0
+            if v >= 0x80 then
+              v = v - 0x100
+            end
+            param.value = v
           else
             param.value = writeValue
+          end
+          -- Dynamic power off hides Fan Thresh: mimic firmware visibility
+          -- rules driven by sibling values, so a write can flip a field's
+          -- hidden bit and the Lua script sees it on the sibling re-read.
+          if device.id == CRSF.ADDRESS_TX and param.id == 8 then
+            local fanThresh = findParam(device, 9)
+            if fanThresh then
+              fanThresh.hidden = (param.value == 0) or nil
+            end
           end
           -- Output Mapping per-channel config: mimic firmware behavior
           -- where changing Output Ch loads sibling values from per-channel config,
@@ -1292,7 +1466,7 @@ end
 -- mockPop: Returns next queued packet or nil
 -- ============================================================================
 
-local function mockPop()
+local function mockPop(consumer)
   if not startTime then
     startTime = getTime()
   end
@@ -1302,7 +1476,7 @@ local function mockPop()
   local i = 1
   while i <= #delayedResponseQueue do
     if now >= delayedResponseQueue[i].deliverAt then
-      local entry = tableRemove(delayedResponseQueue, i)
+      local entry = shim.tableRemove(delayedResponseQueue, i)
       ---@diagnostic disable-next-line: need-check-nil
       queuePush(entry.command, entry.data)
     else
@@ -1310,7 +1484,7 @@ local function mockPop()
     end
   end
 
-  local command, data = queuePop()
+  local command, data = queuePop(consumer)
 
   -- Apply deferred folder name updates once enough real time has elapsed.
   -- Until then, any PARAMETER_READ for a folder returns the stale dynName.
@@ -1352,6 +1526,22 @@ local scenarioTelemetry = {
     GSpd = 25.3,
     Alt = 142,
   },
+  -- A receiver with one RF path: it never writes uplink_RSSI_2, so 2RSS arrives
+  -- as 0 dBm and the widget should report no diversity.
+  single_antenna = {
+    TPWR = 50,
+    RFMD = 7,
+    ["1RSS"] = -84,
+    ["2RSS"] = 0,
+    RQly = 97,
+    ANT = 0,
+    RxBt = 15.1,
+    Curr = 11.0,
+    FM = "ACRO",
+    Sats = 11,
+    GSpd = 22.4,
+    Alt = 120,
+  },
   armed = {
     TPWR = 250,
     RFMD = 7,
@@ -1366,15 +1556,45 @@ local scenarioTelemetry = {
     GSpd = 42.7,
     Alt = 85,
   },
+  -- Bench-realistic signal: a mismatch is caught next to the quad, and the
+  -- active-antenna RSSI must clear the model-match poll's -70 dBm gate.
   model_mismatch = {
     TPWR = 50,
     RFMD = 7,
-    ["1RSS"] = -90,
-    ["2RSS"] = -95,
+    ["1RSS"] = -55,
+    ["2RSS"] = -58,
     RQly = 95,
     ANT = 1,
     RxBt = 15.8,
     Curr = 0.5,
+  },
+  -- Same signal as model_mismatch; RQly is driven by sensorToggle so the link
+  -- drops and returns forever (~10 s up, ~5 s down).
+  mismatch_cycle = {
+    TPWR = 50,
+    RFMD = 7,
+    ["1RSS"] = -55,
+    ["2RSS"] = -58,
+    RQly = 95,
+    ANT = 1,
+    RxBt = 15.8,
+    Curr = 0.5,
+  },
+  -- Marginal link: RQly never 0 and never above 90, active-antenna RSSI never
+  -- above -70 dBm, so every gated poll must stay quiet.
+  weak_link = {
+    TPWR = 250,
+    RFMD = 7,
+    ["1RSS"] = -85,
+    ["2RSS"] = -88,
+    RQly = 60,
+    ANT = 0,
+    RxBt = 15.2,
+    Curr = 12.5,
+    FM = "ACRO",
+    Sats = 9,
+    GSpd = 31.0,
+    Alt = 210,
   },
   reconnect = {
     -- Same as normal; only served when isRxAvailable() is true
@@ -1402,6 +1622,21 @@ local scenarioTelemetry = {
     GSpd = 25.3,
     Alt = 142,
   },
+  critical_error = {
+    -- Same link as normal; only the ELRS status flags differ.
+    TPWR = 50,
+    RFMD = 7,
+    ["1RSS"] = -87,
+    ["2RSS"] = -93,
+    RQly = 99,
+    ANT = 1,
+    RxBt = 15.2,
+    Curr = 12.5,
+    FM = "ACRO",
+    Sats = 12,
+    GSpd = 25.3,
+    Alt = 142,
+  },
 }
 
 -- Jitter ranges for sensors that fluctuate in real life.
@@ -1415,6 +1650,28 @@ local sensorJitter = {
   GSpd = 3.0,
   Alt = 5,
 }
+
+-- Per-scenario sensors that step through a fixed sequence instead of jittering,
+-- so both branches of an enum sensor are reachable within one simulator run.
+-- Takes precedence over sensorJitter and over the scenario's base value; one
+-- entry is consumed per cache refresh, i.e. one per second. A single-entry
+-- sequence pins a value that would otherwise be jittered.
+local sensorToggle = {
+  normal = {
+    -- Alternate antennas so both the "Ant 1" and "Ant 2" branches render.
+    ANT = { 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 }, -- ~5 s per antenna
+  },
+  single_antenna = {
+    -- Must stay exactly 0: that is what marks the second RF path as absent.
+    ["2RSS"] = { 0 },
+  },
+  mismatch_cycle = {
+    -- ~10 s connected, ~5 s down, repeating. Exactly 95 or 0 so the
+    -- RQly-derived connection state flips cleanly on each phase change.
+    RQly = { 95, 95, 95, 95, 95, 95, 95, 95, 95, 95, 0, 0, 0, 0, 0 },
+  },
+}
+local toggleStep = 0
 
 -- Telemetry values are cached and only refreshed once per second to match
 -- realistic sensor update rates and avoid excessive CPU in the simulator.
@@ -1447,9 +1704,14 @@ local function updateTelemetryCache()
   end
 
   telemetryCache = {}
+  toggleStep = toggleStep + 1
+  local toggles = sensorToggle[config.scenario]
   for sensorId, base in pairs(t) do
+    local seq = toggles and toggles[sensorId]
     local jit = sensorJitter[sensorId]
-    if jit then
+    if seq then
+      telemetryCache[sensorId] = seq[(toggleStep % #seq) + 1]
+    elseif jit then
       local val = base + (math.random() * 2 - 1) * jit
       if jit == math.floor(jit) then
         val = math.floor(val + 0.5)

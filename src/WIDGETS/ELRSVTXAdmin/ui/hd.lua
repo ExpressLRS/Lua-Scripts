@@ -4,8 +4,6 @@
 ---------------------------------------------------------------------------
 
 local ctx = ...
-local VTX = ctx.VTX
-local Protocol = ctx.Protocol
 local bgOpacity = ctx.bgOpacity
 local VTXDisplay = ctx.VTXDisplay
 local WidgetLayout = ctx.WidgetLayout
@@ -27,9 +25,9 @@ WidgetUI.breakpoints = {
 WidgetUI.fonts = {
   sixth = { status = BOLD },
   quarter = { status = BOLD },
-  third = { status = MIDSIZE },
-  half = { hero = MIDSIZE, detail = SMLSIZE },
-  full = { hero = MIDSIZE, detail = 0 },
+  third = { status = MIDSIZE, cheatsheet = STDSIZE },
+  half = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
+  full = { hero = MIDSIZE, detail = 0, cheatsheet = STDSIZE },
 }
 
 -- ============================================================================
@@ -37,8 +35,7 @@ WidgetUI.fonts = {
 -- ============================================================================
 
 local TopBarUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/topbar.lua")({
-  Protocol = Protocol,
-  VTX = VTX,
+  VTXDisplay = VTXDisplay,
 })
 
 --- 1/6: single row. Wide: band + detail + cheatsheet. Narrow: band + detail.
@@ -175,9 +172,10 @@ function WidgetUI.buildThird(w, h, opa)
       },
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.third.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -216,9 +214,10 @@ function WidgetUI.buildHalf(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.half.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
@@ -257,9 +256,10 @@ function WidgetUI.buildFull(w, h, opa)
       text = VTXDisplay.detailLong,
     },
   }
-  local cheatsheet = VTXDisplay.buildCheatsheet()
-  if cheatsheet then
-    rows[#rows + 1] = cheatsheet
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.full.cheatsheet)
+  if cs1 then
+    rows[#rows + 1] = cs1
+    rows[#rows + 1] = cs2
   end
 
   WidgetLayout.column(w, h, opa, rows)
