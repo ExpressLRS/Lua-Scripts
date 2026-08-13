@@ -38,6 +38,13 @@ tools:
     depends:
       - ELRS
 
+  - name: ExpressLRSBind
+    path: SCRIPTS/TOOLS/ExpressLRSBind
+    depends:
+      - ELRS
+    exclude:
+      - history.txt
+
 widgets:
   - name: ELRSTelemetry
     path: WIDGETS/ELRSTelemetry
