@@ -6,21 +6,15 @@
 -- Administrator over the CRSF config protocol (PARAMETER_READ/WRITE).   --
 -- Field IDs are discovered at runtime by name -- never hardcoded.       --
 --                                                                       --
--- Wires the components around it -- presets_storage.lua, ui/display.lua, --
--- ui/fullscreen.lua, the shared ELRS file_storage library -- and a      --
--- screen-specific minimized layout from ui/ picked by LCD_W/LCD_H,      --
--- then runs the widget lifecycle. Loaded fresh per widget instance, so  --
--- every table here is per-instance state.                               --
+-- Wires the components around it -- ui/display.lua, ui/fullscreen.lua   --
+-- and a screen-specific minimized layout from ui/ picked by LCD_W/LCD_H --
+-- -- then runs the widget lifecycle. Loaded fresh per widget instance,  --
+-- so every table here is per-instance state, except PresetsStorage:     --
+-- main.lua hands every instance the same store, whose latch table is    --
+-- how the 6POS automation consumes an edge exactly once per radio.      --
 ---------------------------------------------------------------------------
 
-local zone, options, crsf, CRSFSession = ...
-
--- ============================================================================
--- Components: file storage (shared ELRS library) and 6POS preset settings
--- ============================================================================
-
-local FileStorage = loadScript("/SCRIPTS/ELRS/file_storage.lua")()
-local PresetsStorage = loadScript("/WIDGETS/ELRSVTXAdmin/presets_storage.lua")(FileStorage)
+local zone, options, crsf, CRSFSession, PresetsStorage = ...
 
 -- ============================================================================
 -- VTXAdmin: client of the ELRS "VTX Administrator" service on the TX module
@@ -51,18 +45,10 @@ local VTXAdmin = {
   -- widget scripts, and whatever it changed needs one read-back on resume.
   lastTick = 0,
 
-  -- 6POS processing state: last consumed position (-1 until the first settle;
-  -- read by the cheatsheet highlight and the full-screen rebuild tracking)
-  -- plus the debounce bookkeeping.
-  lastPos = -1,
-  stablePos = -1,
-  stableTime = 0,
+  -- 6POS debounce window. The processing state itself -- consumed position,
+  -- collection, push trigger level -- lives on PresetsStorage.latch, shared
+  -- across widget instances.
   DEBOUNCE = 20, -- 200ms in getTime() ticks (10ms each)
-
-  -- Push trigger edge detection state. nil until the first sample has been
-  -- taken; the full-screen editor resets it on trigger-source reassignment.
-  ---@type boolean?
-  pushLastHigh = nil,
 
   -- Field IDs (discovered at runtime)
   ids = {
@@ -289,8 +275,11 @@ local function mapTo6Pos(value)
   return pos
 end
 
---- Runs every tick. Reads the 6POS source, debounces, and applies the
---- matching preset on edge-detected position changes.
+--- Runs every tick. Reads the 6POS source, debounces, and applies the matching
+--- preset when the consumed (collection, position) pair changes. The state
+--- lives on the shared latch so an edge produces one write per radio, not one
+--- per instance: widget callbacks run sequentially in one Lua state, so the
+--- first instance that can act consumes the edge and the rest see none.
 local function process6Pos()
   if not PresetsStorage.enabled then
     return
@@ -304,48 +293,56 @@ local function process6Pos()
     return
   end
 
+  local latch = PresetsStorage.latch
   local pos = mapTo6Pos(value)
   local now = getTime()
 
-  -- Debounce: require stable position for DEBOUNCE ticks
-  if pos ~= VTXAdmin.stablePos then
-    VTXAdmin.stablePos = pos
-    VTXAdmin.stableTime = now
+  -- Debounce: require stable position for DEBOUNCE ticks. Shared: the source
+  -- is radio state, so one debounce serves every instance.
+  if pos ~= latch.stablePos then
+    latch.stablePos = pos
+    latch.stableTime = now
     return
   end
-  if now - VTXAdmin.stableTime < VTXAdmin.DEBOUNCE then
+  if now - latch.stableTime < VTXAdmin.DEBOUNCE then
     return
   end
 
-  -- Only consume a position once a write can actually land. writeConfig() drops
-  -- everything outside the ready phase, and lastPos is latched before it is called, so
-  -- latching any earlier discards the position permanently -- during a send, and during
-  -- discovery whenever it outruns the debounce. Holding until ready is also what makes
-  -- the first tick after discovery assert the boot position to the module.
+  -- Only consume a position once THIS instance can write. writeConfig() drops
+  -- everything outside the ready phase, and the latch is taken before it is
+  -- called, so latching any earlier discards the edge permanently -- for every
+  -- instance at once. Holding until ready is also what makes the first tick
+  -- after discovery assert the boot position to the module.
   if not VTXAdmin.isReady() then
     return
   end
 
-  -- Edge-triggered: only send on position change
-  if pos == VTXAdmin.lastPos then
+  -- Edge-triggered: send when either half of the (collection, position) pair
+  -- the module is holding changes. Picking a different collection retunes the
+  -- VTX without touching the switch.
+  if pos == latch.lastPos and PresetsStorage.collection == latch.lastCollection then
     return
   end
-  VTXAdmin.lastPos = pos
+  latch.lastPos = pos
+  latch.lastCollection = PresetsStorage.collection
 
+  -- An unused slot leaves the VTX untouched rather than turning it off. The
+  -- latch is already taken, so this is deliberate: the skip does not retry.
   local preset = PresetsStorage.items[pos]
-  if preset and preset.band > 0 then
-    print(table.concat({ "VTXAdmin: 6POS pos=", pos, " -> band=", preset.band, " ch=", preset.channel }))
-    VTXAdmin.applyPreset(preset.band, preset.channel)
-    if PresetsStorage.autoPushVtx then
-      VTXAdmin.pushToVtx()
-    end
-  else
-    print(table.concat({ "VTXAdmin: 6POS pos=", pos, " -> Off (skipped)" }))
+  if not preset or preset.band == 0 then
+    return
+  end
+
+  VTXAdmin.applyPreset(preset.band, preset.channel)
+  if PresetsStorage.autoPushVtx then
+    VTXAdmin.pushToVtx()
   end
 end
 
 --- Runs every tick. Edge-detects the pushSource going high and triggers
---- pushToVtx() to send the current config to the VTX.
+--- pushToVtx() to send the current config to the VTX. The state lives on the
+--- shared latch so a rising edge fires one push per radio, not one per
+--- instance.
 local function processPushTrigger()
   if PresetsStorage.autoPushVtx then
     return
@@ -359,19 +356,31 @@ local function processPushTrigger()
     return
   end
 
+  local latch = PresetsStorage.latch
   local high = val > 0
-  local wasHigh = VTXAdmin.pushLastHigh
-  VTXAdmin.pushLastHigh = high
 
-  if wasHigh == nil then
-    -- First sample after create or reassignment: adopt the level without firing. A
-    -- source that is already high was not just moved there by the user.
+  -- The level latch is only meaningful for the source it was sampled from: a
+  -- reassignment adopts the new source's level without firing. A source that
+  -- is already high was not just moved there by the user. This also seeds the
+  -- latch on the first sample after boot.
+  if PresetsStorage.pushSource ~= latch.pushSourceSeen then
+    latch.pushSourceSeen = PresetsStorage.pushSource
+    latch.pushLastHigh = high
     return
   end
 
+  -- Only consume once THIS instance can send (the same gate pushToVtx
+  -- applies): latching earlier would eat the rising edge for every instance
+  -- while nobody could act on it.
+  if not VTXAdmin.isReady() and not VTXAdmin.isSending() then
+    return
+  end
+
+  local wasHigh = latch.pushLastHigh
+  latch.pushLastHigh = high
+
   -- Edge detection: trigger only on rising edge (low -> high)
   if high and not wasHigh then
-    print("VTXAdmin: push source triggered - sending VTx command")
     VTXAdmin.pushToVtx()
   end
 end
@@ -552,8 +561,6 @@ local WidgetUI = loadScript(uiPath)({
 -- Widget lifecycle
 -- ============================================================================
 
-local lastBuilt6pos = -1
-
 local wgt = {
   zone = zone,
   options = options,
@@ -566,12 +573,12 @@ end
 
 function wgt.refresh(_event, _touchState)
   wgt.background()
-  if lvgl.isFullScreen() and VTXAdmin.lastPos ~= lastBuilt6pos then
-    lastBuilt6pos = VTXAdmin.lastPos
-    FullScreenUI.build()
-  end
 end
 
+-- The full-screen page is built once, on entry. Everything it shows updates in
+-- place from there: every value is a per-frame callback or a control that polls
+-- its get() -- see the ui/fullscreen.lua header for the constraint that keeps
+-- that true.
 function wgt.update(newOptions)
   wgt.options = newOptions
   if lvgl.isFullScreen() then
@@ -579,9 +586,7 @@ function wgt.update(newOptions)
       VTXAdmin.syncDesiredFromState()
     end
     FullScreenUI.build()
-    lastBuilt6pos = VTXAdmin.lastPos
   else
-    lastBuilt6pos = -1
     WidgetUI.build(wgt.zone, wgt.options)
   end
 end

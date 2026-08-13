@@ -24,9 +24,17 @@ local function create(zone, options)
     ---@diagnostic disable-next-line: need-check-nil
     _crsfSessionClass = getSessionClass(_crsfSingleton, params)
   end
+  if not _vtxPresetsStorage then
+    local getFileStorage = loadScript("/SCRIPTS/ELRS/file_storage.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    local fileStorage = getFileStorage()
+    local getPresetsStorage = loadScript("/WIDGETS/ELRSVTXAdmin/presets_storage.lua")
+    ---@diagnostic disable-next-line: need-check-nil
+    _vtxPresetsStorage = getPresetsStorage(fileStorage)
+  end
   local loadable = loadScript("/WIDGETS/" .. name .. "/loadable.lua")
   ---@diagnostic disable-next-line: need-check-nil
-  return loadable(zone, options, _crsfSingleton, _crsfSessionClass)
+  return loadable(zone, options, _crsfSingleton, _crsfSessionClass, _vtxPresetsStorage)
 end
 
 local function refresh(widget, event, touchState)

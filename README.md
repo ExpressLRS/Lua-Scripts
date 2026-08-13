@@ -78,7 +78,7 @@ The telemetry widget (`WIDGETS/ELRSTelemetry/`) displays real-time link statisti
 
 ## VTX Administrator Widget
 
-The VTX Administrator widget (`WIDGETS/ELRSVTXAdmin/`) provides control over your video transmitter settings -- band, channel, power level, and pit mode -- directly from your radio telemetry screen. It also supports 6POS quick change for rapid VTX channel switching via a 6POS switch.
+The VTX Administrator widget (`WIDGETS/ELRSVTXAdmin/`) provides control over your video transmitter settings -- band, channel, power level, and pit mode -- directly from your radio telemetry screen. It also supports 6POS quick change for rapid VTX channel switching via a 6POS switch. Presets are organised into six collections selected in the widget's editor, so your home field and a race event can each keep their own set of channels.
 
 <img src="screenshots/widget_vtxadmin_fullscreen.png" width="472" alt="VTX Administrator Widget">
 

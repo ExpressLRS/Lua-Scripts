@@ -6,6 +6,14 @@
 -- One layout for every screen size: VTX Settings editing                --
 -- VTXAdmin.desired, the Send VTx button, 6POS Quick Change and preset   --
 -- slot rows saving through PresetsStorage, and the no-module checklist. --
+--                                                                       --
+-- The page is built once, on full-screen entry, and never rebuilt, so   --
+-- focus and scroll survive every value change. Values that change under --
+-- it -- a collection switch swapping the preset rows, a 6POS move       --
+-- rewriting VTXAdmin.desired -- reach the screen through each control's --
+-- get() callback. choice and toggle re-poll it on every supported       --
+-- firmware; numberEdit re-polls only on EdgeTX 2.12.0+, so on older     --
+-- firmware its digits catch up when the page is next entered.           --
 ---------------------------------------------------------------------------
 
 local VTXAdmin, PresetsStorage = ...
@@ -18,6 +26,13 @@ local FullScreenUI = {}
 
 -- Portrait screens get a narrower label column to leave more room for controls.
 local LABEL_PCT = (LCD_W < LCD_H) and 42 or 50
+
+-- One label per collection, from the storage's count -- the only place the
+-- number of collections lives.
+local COLLECTION_VALUES = {}
+for i = 1, PresetsStorage.COLLECTION_COUNT do
+  COLLECTION_VALUES[i] = table.concat({ "Collection ", i })
+end
 
 local function createRow(container, label, hint, visibleFn)
   local row = container:rectangle({
@@ -275,7 +290,6 @@ function FullScreenUI.build()
     end,
     function(v)
       PresetsStorage.pushSource = v or 0
-      VTXAdmin.pushLastHigh = nil
       PresetsStorage.save()
     end,
     lvgl.SRC_STICK + lvgl.SRC_POT + lvgl.SRC_SWITCH,
@@ -285,7 +299,13 @@ function FullScreenUI.build()
   -- Presets section
   createSectionHeader(fields, "Presets")
 
-  createHintRow(fields, "Assign a Band and Channel to each 6POS switch position.")
+  createChoiceRow(fields, "Collection", COLLECTION_VALUES, function()
+    return PresetsStorage.collection
+  end, function(idx)
+    PresetsStorage.selectCollection(idx)
+  end)
+
+  createHintRow(fields, "Assign a Band and Channel to each 6POS switch position. Switching collection swaps all six.")
 
   local bandValues = { "--", "A", "B", "E", "F", "R", "L" }
   for i = 1, 6 do

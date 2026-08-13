@@ -194,7 +194,7 @@ function VTXDisplay.build6posLabels(font)
       type = lvgl.LABEL,
       font = font or SMLSIZE,
       color = function()
-        return (VTXAdmin.lastPos == idx) and COLOR_THEME_PRIMARY1 or COLOR_THEME_DISABLED
+        return (PresetsStorage.latch.lastPos == idx) and COLOR_THEME_PRIMARY1 or COLOR_THEME_DISABLED
       end,
       text = function()
         local p = PresetsStorage.items[idx]
