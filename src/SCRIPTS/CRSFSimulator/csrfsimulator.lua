@@ -48,6 +48,9 @@ local shim = loadScript("/SCRIPTS/CRSFSimulator/shim.lua")()
 --                    error (baud rate too low). Exercises the warning screen
 --                    and the suppress-critical-errors write (field id 0x2E),
 --                    which clears the flags until the script restarts.
+--
+-- In every connected scenario the armed flag additionally follows CH5 (AUX1,
+-- the ELRS arm channel): drive it high to arm mid-session, low to disarm.
 local config = {
   scenario = "normal",
   -- Largest frame the handset link carries (CRSF_MAX_PACKET_LEN on a fast
@@ -1116,37 +1119,53 @@ end
 -- supressCriticalErrors): critical flag bits stay cleared afterwards.
 local criticalErrorsSuppressed = false
 
+-- CH5 is AUX1, the ELRS arm channel: armed while it is high.
+-- getOutputValue is 0-based, so 4 reads CH5.
+local function isArmed()
+  return (getOutputValue(4) or 0) > 0
+end
+
 local function getElrsFlags()
+  local flags
   if config.scenario == "reconnect" then
-    return isRxAvailable() and 0x01 or 0x00
+    flags = isRxAvailable() and 0x01 or 0x00
   elseif config.scenario == "model_mismatch" or config.scenario == "mismatch_cycle" then
-    return 0x05 -- connected + model mismatch
+    flags = 0x05 -- connected + model mismatch
   elseif config.scenario == "armed" then
-    return 0x09 -- connected + armed
+    flags = 0x09 -- connected + armed
   elseif config.scenario == "critical_error" then
     if criticalErrorsSuppressed then
-      return 0x01 -- connected, critical bits suppressed
+      flags = 0x01 -- connected, critical bits suppressed
+    else
+      flags = 0x41 -- connected + baud rate error (critical)
     end
-    return 0x41 -- connected + baud rate error (critical)
   elseif
     config.scenario == "normal"
     or config.scenario == "slow_loading"
     or config.scenario == "single_antenna"
     or config.scenario == "weak_link"
   then
-    return 0x01 -- connected
+    flags = 0x01 -- connected
   else
-    return 0x00 -- no telemetry
+    flags = 0x00 -- no telemetry
   end
+  -- Sampled per status answer while connected, like handset->IsArmed()
+  -- in sendELRSstatus()
+  if bit32.btest(flags, 0x01) and isArmed() then
+    flags = bit32.bor(flags, 0x08)
+  end
+  return flags
 end
 
-local function getElrsFlagsInfo()
-  if config.scenario == "model_mismatch" or config.scenario == "mismatch_cycle" then
-    return "Model Mismatch"
-  elseif config.scenario == "armed" then
-    return "[ ! Armed ! ]"
-  elseif config.scenario == "critical_error" and not criticalErrorsSuppressed then
+-- Highest set bit wins, matching the messages[] scan (7..0) in
+-- sendELRSstatus(); the suppressed critical bit is already off in flags.
+local function getElrsFlagsInfo(flags)
+  if bit32.btest(flags, 0x40) then
     return "Baud rate too low"
+  elseif bit32.btest(flags, 0x08) then
+    return "[ ! Armed ! ]"
+  elseif bit32.btest(flags, 0x04) then
+    return "Model Mismatch"
   end
   return ""
 end
@@ -1313,7 +1332,7 @@ local function mockPush(command, data)
     -- Special case: ELRS status request (fieldId == 0)
     if fieldId == 0 then
       local flags = getElrsFlags()
-      local flagsInfo = getElrsFlagsInfo()
+      local flagsInfo = getElrsFlagsInfo(flags)
       local destAddr = data[2] or CRSF.ADDRESS_HANDSET
       queuePush(CRSF.FRAMETYPE_ELRS_STATUS, encodeElrsStatus(deviceId, destAddr, 0, 250, flags, flagsInfo))
       return true

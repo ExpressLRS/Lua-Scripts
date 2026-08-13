@@ -31,6 +31,10 @@ end
 -- UI state
 -- ============================================================================
 
+-- Title warning flash half-period, in 10 ms ticks. Also paces the idle page
+-- repaint (the flash tick sets forceRedraw), so halving it doubles that rate.
+local WARN_FLASH_PERIOD = 100
+
 local UI = {
   -- Cursor/selection state (owned entirely by this module)
   lineIndex = 1,
@@ -55,7 +59,8 @@ local UI = {
 
   -- Warning flashing
   titleShowWarn = nil,
-  titleShowWarnTimeout = 100,
+  titleShowWarnTimeout = 0,
+  titleWarnFlags = nil, -- last flags byte the flash phase was anchored to
 
   -- Warning dismissal (model mismatch)
   warningDismissedAt = nil,
@@ -158,11 +163,18 @@ end
 -- ============================================================================
 
 function UI.render(event, _touchState)
-  -- Warning flashing timer
+  -- Warning flash: any flags change re-anchors the phase, so a new warning
+  -- starts on its visible half and a cleared one disappears at once
   local time = getTime()
-  if time > UI.titleShowWarnTimeout then
-    UI.titleShowWarn = (session.status.flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
-    UI.titleShowWarnTimeout = time + 100
+  local flags = session.status.flags
+  if flags ~= UI.titleWarnFlags then
+    UI.titleWarnFlags = flags
+    UI.titleShowWarn = (flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK) or nil
+    UI.titleShowWarnTimeout = time + WARN_FLASH_PERIOD
+    UI.forceRedraw = true
+  elseif time > UI.titleShowWarnTimeout then
+    UI.titleShowWarn = (flags > crsf.CONST.ELRS_FLAGS_STATUS_MASK and not UI.titleShowWarn) or nil
+    UI.titleShowWarnTimeout = time + WARN_FLASH_PERIOD
     UI.forceRedraw = true
   end
 
