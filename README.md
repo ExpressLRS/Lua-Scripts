@@ -85,19 +85,10 @@ The main tool (`SCRIPTS/TOOLS/ExpressLRS/`) lets you configure your ExpressLRS t
 ## ExpressLRS Bind Phrase Manager
 
 The bind tool (`SCRIPTS/TOOLS/ExpressLRSBind/`) sets the bind phrase -- or a raw UID entered as
-comma-separated bytes -- on the transmitter, the receiver, or both in one sequence, and can put the
-TX in bind mode or unbind a connected receiver. The last five phrases are kept as a pick-and-send
-history.
-
-The transmitter's UID is read back automatically -- when the tool opens, after every write, and
-whenever you change the target -- so the page always shows the identity the handset is transmitting
-on. The receiver's own UID is not read: a receiver only answers over an active link, and a link only
-exists between devices that already share a UID, so its answer could never differ from the
-transmitter's. What is worth knowing is whether it is there at all, which the link reports for free.
-
-Setting the phrase over MSP requires **ExpressLRS 4.1+** on the device; a pre-4.1 module never
-answers, and the tool says so in the transmitter row rather than retrying forever. Bind and unbind
-are plain CRSF commands and work on every ExpressLRS version.
+comma-separated bytes -- on the transmitter, the receiver, or both in one sequence, reads the
+current UID back for verification, and can put the TX in bind mode or unbind a connected receiver.
+The last five phrases are kept as a pick-and-send history. Setting the phrase over MSP requires
+**ExpressLRS 4.1+** on the device.
 
 <img src="screenshots/tool_bind_bw.png" width="256" alt="ExpressLRS Bind Phrase Manager"><br/>
 
