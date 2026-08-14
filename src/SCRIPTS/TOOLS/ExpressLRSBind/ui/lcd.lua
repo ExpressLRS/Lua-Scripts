@@ -17,12 +17,12 @@ local drawAlert = loadScript("/SCRIPTS/ELRS/ui/lcd/alert.lua")()
 -- UI state
 -- ============================================================================
 
--- Row ids (numeric to save RAM). History items are encoded as HIST_BASE + i.
+-- Cursor stop ids (numeric to save RAM). History items are HIST_BASE + i.
 local ROW_PHRASE = 1
 local ROW_TARGET = 2
-local ROW_UID = 3
-local ROW_SET = 4
-local ROW_BIND = 5 -- renders Bind or Unbind depending on the link
+local ROW_SET = 3
+local ROW_BIND = 4
+local ROW_UNBIND = 5
 local ROW_HISTORY = 6
 local ROW_EXIT = 7
 local ROW_CLEAR = 8
@@ -44,23 +44,31 @@ local UI = {
   ---@type table constructed in init(), needs LCD_W for the window
   phraseEdit = nil,
 
-  -- Pending confirmation popup: { msg, i (history index) or nil = clear all }
+  -- Pending confirmation popup: { msg, info, fn }. Only msg reaches the
+  -- screen: EdgeTX's Lua binding sets warningInfoText without
+  -- warningInfoLength, so the BW popup draws the info line zero chars wide
+  -- (api_general.cpp luaPopupConfirmation). Keep msg under 24 chars --
+  -- WARNING_LINE_LEN -- and say what matters there.
   confirm = nil,
 
-  -- Layout constants for 128x64; UI.init widens COL2 at 212px wide
+  -- Layout constants for 128x64; UI.init widens COL2 at 212 px wide
   COL1 = 0,
-  COL2 = 70,
+  COL2 = 54,
   textSize = 8,
   textYoffset = 3,
+  ---@type table row baselines, filled by init() for the screen height
+  y = nil,
 
-  -- Redraw state: the page repaints on events and whenever the live status
-  -- line changes (statusLine below), tracked as a string compare per frame.
+  -- Redraw state: the page repaints on events and whenever a live part of
+  -- it changes (statusKey below), tracked as a string compare per frame.
   forceRedraw = true,
   lastStatus = nil,
 }
 
--- Both pages fit the 8-row 128x64 grid (main 7 rows, history at most 7),
--- so there is no scrolling and no page offset in this UI.
+-- 128x64 has room for three normal rows, the two report lines and one
+-- action row, which is why the three actions share a line at SMLSIZE.
+local Y_SHORT = { phrase = 9, target = 17, set = 25, tx = 34, rx = 41, actions = 48, exit = 56 }
+local Y_TALL = { phrase = 10, target = 20, set = 30, tx = 44, rx = 52, actions = 62, exit = 76 }
 
 -- ============================================================================
 -- Interface: init
@@ -70,6 +78,7 @@ function UI.init()
   if LCD_W == 212 then
     UI.COL2 = 110
   end
+  UI.y = (LCD_H >= 96) and Y_TALL or Y_SHORT
 
   -- The phrase window ends at the cursor; 6 px per char of the fixed BW font
   UI.phraseEdit = TextEdit.new(msp.CONST.PHRASE_MAX, math.floor((LCD_W - UI.COL2 - 2) / 6))
@@ -113,7 +122,7 @@ function UI.handleNoModule()
 end
 
 -- ============================================================================
--- Row list
+-- Cursor stops
 -- ============================================================================
 
 local function buildRows()
@@ -124,10 +133,12 @@ local function buildRows()
   if UI.page == PAGE_MAIN then
     rows[1] = ROW_PHRASE
     rows[2] = ROW_TARGET
-    rows[3] = ROW_UID
-    rows[4] = ROW_SET
-    if App.target == App.TARGET_RX then
-      rows[5] = ROW_BIND
+    rows[3] = ROW_SET
+    rows[4] = ROW_BIND
+    -- Unbind appears only with a receiver to unbind, so the cursor never
+    -- lands on a dead action -- and Bind keeps its place either way.
+    if crsf.hasTelemetry then
+      rows[#rows + 1] = ROW_UNBIND
     end
     rows[#rows + 1] = ROW_HISTORY
     rows[#rows + 1] = ROW_EXIT
@@ -141,16 +152,6 @@ local function buildRows()
   if UI.lineIndex > #rows then
     UI.lineIndex = #rows
   end
-end
-
---- The UID/status row text: compact so it fits 128 px at SMLSIZE.
-local function statusLine()
-  if App.statusText then
-    return App.statusText
-  end
-  local u = App.uid
-  local prefix = (App.uidFrom == crsf.CONST.ADDRESS_RX) and "RX" or "TX"
-  return string.format("%s: %d,%d,%d,%d,%d,%d", prefix, u[1], u[2], u[3], u[4], u[5], u[6])
 end
 
 -- ============================================================================
@@ -176,30 +177,25 @@ end
 
 local function handleEnter(id)
   if id == ROW_PHRASE then
-    if App.isTargetReachableOrBoth() then
-      UI.phraseEdit.value = App.phrase
-      UI.phraseEdit:start()
-    end
+    UI.phraseEdit.value = App.phrase
+    UI.phraseEdit:start()
   elseif id == ROW_TARGET then
     UI.editTarget = true
-  elseif id == ROW_UID then
-    App.startUidRequest()
   elseif id == ROW_SET then
-    if App.isTargetReachableOrBoth() and App.phrase ~= "" then
-      App.sendSet()
-    end
+    App.sendSet()
   elseif id == ROW_BIND then
-    if crsf.hasTelemetry then
-      App.sendUnbind()
-    else
-      App.sendBind()
-    end
+    -- Bind is a mode the module enters, not an event that completes, and
+    -- the other half of the pairing is the user's to do -- so the advice
+    -- belongs before the press, not after it.
+    UI.confirm = { msg = "Bind transmitter?", info = "Also bind the RX", fn = App.sendBind }
+  elseif id == ROW_UNBIND then
+    UI.confirm = { msg = "Unbind receiver?", info = "Link will drop", fn = App.sendUnbind }
   elseif id == ROW_HISTORY then
     goToPage(PAGE_HISTORY)
   elseif id == ROW_EXIT then
     App.shouldExit = true
   elseif id == ROW_CLEAR then
-    UI.confirm = { msg = "Clear history?" }
+    UI.confirm = { msg = "Clear history?", info = "[OK] to confirm", fn = App.clearHistory }
   elseif id == ROW_BACK then
     goToPage(PAGE_MAIN)
   elseif id > HIST_BASE then
@@ -221,9 +217,9 @@ local function handleEvent(event)
   -- Target edit: rotary cycles, ENTER or EXIT commits
   if UI.editTarget then
     if event == EVT_VIRTUAL_NEXT then
-      App.target = math.min(App.target + 1, App.TARGET_BOTH)
+      App.setTarget(math.min(App.target + 1, App.TARGET_BOTH))
     elseif event == EVT_VIRTUAL_PREV then
-      App.target = math.max(App.target - 1, App.TARGET_TX)
+      App.setTarget(math.max(App.target - 1, App.TARGET_TX))
     elseif event == EVT_VIRTUAL_ENTER or event == EVT_VIRTUAL_EXIT then
       UI.editTarget = nil
     end
@@ -242,7 +238,14 @@ local function handleEvent(event)
     killEvents(event)
     local id = UI.rows[UI.lineIndex]
     if id and id > HIST_BASE then
-      UI.confirm = { msg = "Delete entry?", i = id - HIST_BASE }
+      local i = id - HIST_BASE
+      UI.confirm = {
+        msg = "Delete entry?",
+        info = "[OK] to confirm",
+        fn = function()
+          App.removeHistory(i)
+        end,
+      }
     end
   elseif event == EVT_VIRTUAL_NEXT then
     selectRow(1)
@@ -262,33 +265,56 @@ local function drawTitle()
   lcd.drawText(LCD_W - 1, 1, crsf.hasTelemetry and "C" or "-", INVERS + RIGHT)
 end
 
-local function drawRow(id, yPos, isSelected)
-  local attr = isSelected and INVERS or 0
-  if id == ROW_PHRASE then
-    lcd.drawText(UI.COL1, yPos, "Phrase", 0)
-    UI.phraseEdit:draw(UI.COL2, yPos, attr)
-  elseif id == ROW_TARGET then
-    if UI.editTarget and isSelected then
-      attr = attr + BLINK
+local function attrFor(id)
+  return (UI.rows[UI.lineIndex] == id) and INVERS or 0
+end
+
+local function drawMain()
+  local y = UI.y
+
+  lcd.drawText(UI.COL1, y.phrase, "Phrase", 0)
+  UI.phraseEdit:draw(UI.COL2, y.phrase, attrFor(ROW_PHRASE))
+
+  local targetAttr = attrFor(ROW_TARGET)
+  if UI.editTarget then
+    targetAttr = targetAttr + BLINK
+  end
+  lcd.drawText(UI.COL1, y.target, "Apply to", 0)
+  lcd.drawText(UI.COL2, y.target, TARGET_NAMES[App.target], targetAttr)
+
+  -- The one action that changes a device: its own row, and its label
+  -- doubles as the write sequence's progress
+  local setAttr = attrFor(ROW_SET)
+  if App.isSetEnabled() then
+    setAttr = setAttr + BOLD
+  end
+  lcd.drawText(LCD_W / 2, y.set, "[" .. App.setLabel(true) .. "]", setAttr + CENTER)
+
+  -- What the devices report back
+  lcd.drawText(UI.COL1, y.tx, "TX " .. App.uidText(true), SMLSIZE)
+  lcd.drawText(UI.COL1, y.rx, "RX " .. App.receiverText(), SMLSIZE)
+
+  lcd.drawText(UI.COL1 + 1, y.actions, "[Bind]", attrFor(ROW_BIND) + SMLSIZE)
+  if crsf.hasTelemetry then
+    lcd.drawText(math.floor(LCD_W * 0.3), y.actions, "[Unbind]", attrFor(ROW_UNBIND) + SMLSIZE)
+  end
+  lcd.drawText(LCD_W - 1, y.actions, "[History]", attrFor(ROW_HISTORY) + SMLSIZE + RIGHT)
+
+  lcd.drawText(LCD_W / 2, y.exit, "[---- EXIT ----]", attrFor(ROW_EXIT) + BOLD + CENTER)
+end
+
+local function drawHistory()
+  for i = 1, #UI.rows do
+    local id = UI.rows[i]
+    local yPos = i * UI.textSize + UI.textYoffset
+    local attr = (UI.lineIndex == i) and INVERS or 0
+    if id == ROW_CLEAR then
+      lcd.drawText(10, yPos, "[Clear All]", attr + BOLD)
+    elseif id == ROW_BACK then
+      lcd.drawText(10, yPos, "[---- BACK ----]", attr + BOLD)
+    else
+      lcd.drawText(UI.COL1, yPos, App.history.items[id - HIST_BASE] or "", attr)
     end
-    lcd.drawText(UI.COL1, yPos, "Target", 0)
-    lcd.drawText(UI.COL2, yPos, TARGET_NAMES[App.target], attr)
-  elseif id == ROW_UID then
-    lcd.drawText(UI.COL1, yPos, statusLine(), attr + SMLSIZE)
-  elseif id == ROW_SET then
-    lcd.drawText(10, yPos, "[Set]", attr + BOLD)
-  elseif id == ROW_BIND then
-    lcd.drawText(10, yPos, crsf.hasTelemetry and "[Unbind]" or "[Bind]", attr + BOLD)
-  elseif id == ROW_HISTORY then
-    lcd.drawText(UI.COL1, yPos, "> History", attr + BOLD)
-  elseif id == ROW_EXIT then
-    lcd.drawText(10, yPos, "[---- EXIT ----]", attr + BOLD)
-  elseif id == ROW_CLEAR then
-    lcd.drawText(10, yPos, "[Clear All]", attr + BOLD)
-  elseif id == ROW_BACK then
-    lcd.drawText(10, yPos, "[---- BACK ----]", attr + BOLD)
-  elseif id > HIST_BASE then
-    lcd.drawText(UI.COL1, yPos, App.history.items[id - HIST_BASE] or "", attr)
   end
 end
 
@@ -299,8 +325,10 @@ local function drawPage(event)
   lcd.clear()
   drawTitle()
 
-  for i = 1, #UI.rows do
-    drawRow(UI.rows[i], i * UI.textSize + UI.textYoffset, UI.lineIndex == i)
+  if UI.page == PAGE_MAIN then
+    drawMain()
+  else
+    drawHistory()
   end
 end
 
@@ -308,12 +336,19 @@ end
 -- Interface: render
 -- ============================================================================
 
+--- Everything on the page that can change without an event: repainting on
+-- a change keeps the UID rows and status live without repainting at frame
+-- rate.
+local function statusKey()
+  return App.setLabel(true) .. App.uidText(true) .. (crsf.hasTelemetry and "C" or "-")
+end
+
 function UI.render(event, _touchState)
   -- Pending confirmation owns the screen until answered. It arms only after
-  -- a quiet frame: the ENTER release that follows the long press which
-  -- opened it would otherwise answer it on the spot.
+  -- a quiet frame: the ENTER release that follows the press which opened it
+  -- would otherwise answer it on the spot.
   if UI.confirm then
-    local result = popupConfirmation(UI.confirm.msg, "PRESS [OK] to confirm", event)
+    local result = popupConfirmation(UI.confirm.msg, UI.confirm.info, event)
     if not UI.confirm.armed then
       if event == 0 then
         UI.confirm.armed = true
@@ -321,11 +356,7 @@ function UI.render(event, _touchState)
       return
     end
     if result == "OK" then
-      if UI.confirm.i then
-        App.removeHistory(UI.confirm.i)
-      else
-        App.clearHistory()
-      end
+      UI.confirm.fn()
       UI.confirm = nil
       UI.forceRedraw = true
     elseif result == "CANCEL" then
@@ -335,9 +366,7 @@ function UI.render(event, _touchState)
     return
   end
 
-  -- Repaint on any event, while editing, and whenever the live parts of the
-  -- page (status line, link flag) changed since the last paint.
-  local status = statusLine() .. (crsf.hasTelemetry and "C" or "-")
+  local status = statusKey()
   if event ~= 0 or UI.forceRedraw or UI.phraseEdit.editing or status ~= UI.lastStatus then
     drawPage(event)
     UI.lastStatus = status

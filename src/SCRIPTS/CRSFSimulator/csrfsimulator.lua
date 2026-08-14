@@ -1258,12 +1258,13 @@ end
 -- MSP bind UID state
 -- ============================================================================
 
--- Per-device bind UID, read and written over MSP RXTX_CONFIG. TX and RX
--- deliberately start different so a fresh "normal" run shows a mismatch
--- that setting both to one phrase visibly fixes.
+-- Per-device bind UID, read and written over MSP RXTX_CONFIG. Both start
+-- on the same UID: a receiver only answers over a link, and a link only
+-- exists between devices that already share one, so a reachable RX whose
+-- UID differs from the TX's is a state the radios cannot be in.
 local mspUid = {
   [CRSF.ADDRESS_TX] = { 13, 213, 105, 32, 0, 1 },
-  [CRSF.ADDRESS_RX] = { 13, 213, 105, 32, 0, 2 },
+  [CRSF.ADDRESS_RX] = { 13, 213, 105, 32, 0, 1 },
 }
 
 --- Derive a deterministic 6-byte UID from bind-phrase bytes: the same

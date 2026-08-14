@@ -22,6 +22,14 @@ local UI = {
   dialogBuilt = false,
 }
 
+-- Same split the config tool uses: label column, value column.
+local IS_NARROW = LCD_W < 400
+local LABEL_PCT = lvgl.PERCENT_SIZE + (IS_NARROW and 42 or 50)
+local VALUE_PCT = lvgl.PERCENT_SIZE + (IS_NARROW and 58 or 50)
+local FULL_PCT = lvgl.PERCENT_SIZE + 100
+
+local TARGET_VALUES = { "Transmitter", "Receiver", "Both" }
+
 -- ============================================================================
 -- Main page
 -- ============================================================================
@@ -30,156 +38,157 @@ local function exitTool()
   App.shouldExit = true
 end
 
-local function isSetEnabled()
-  return App.isTargetReachableOrBoth() and App.phrase ~= ""
+local function hasLink()
+  return crsf.hasTelemetry
 end
 
-local function isRxSelected()
-  return App.target == App.TARGET_RX
+-- Own wrappers: lvgl calls a text getter with no arguments, and both
+-- getters take a compact-format flag as their first parameter.
+local function uidText()
+  return App.uidText()
 end
 
-local function isRxSelectedConnected()
-  return App.target == App.TARGET_RX and crsf.hasTelemetry
+local function setLabel()
+  return App.setLabel()
 end
 
-local function isRxSelectedDisconnected()
-  return App.target == App.TARGET_RX and not crsf.hasTelemetry
+--- Bind is not an event that completes, it is a mode the module enters --
+-- and the other half of the pairing is the user's to do, so the advice
+-- belongs before the press rather than after it.
+local function pressBind()
+  lvgl.confirm({
+    title = "Bind transmitter?",
+    message = "The link drops while the transmitter binds. The receiver must be in bind mode too.",
+    confirm = App.sendBind,
+  })
+end
+
+local function pressUnbind()
+  lvgl.confirm({
+    title = "Unbind receiver?",
+    message = "The link drops and the receiver waits for a bind. Put the transmitter in bind mode to re-pair.",
+    confirm = App.sendUnbind,
+  })
+end
+
+--- One label-and-value row, matching the config tool's info rows.
+local function infoRow(parent, title, text)
+  parent:setting({
+    w = FULL_PCT,
+    title = title,
+    children = {
+      { type = lvgl.LABEL, x = LABEL_PCT, text = text },
+    },
+  })
 end
 
 local function buildUi()
   lvgl.clear()
 
+  -- The subtitle says what the tool is, not what it is doing: a header
+  -- that changes meaning is what made the old UID line so hard to read.
   local pg = lvgl.page({
-    title = "ExpressLRS Bind Phrase",
-    subtitle = App.uidLine,
+    title = "ExpressLRS",
+    subtitle = "Bind phrase manager",
     back = exitTool,
   })
 
-  local tbox = pg:box({
-    w = lvgl.PERCENT_SIZE + 100,
+  local body = pg:box({
+    w = FULL_PCT,
     flexFlow = lvgl.FLOW_COLUMN,
   })
 
-  -- ***** Bind Phrase label + text edit + Set button *****
-  tbox:setting({
-    w = lvgl.PERCENT_SIZE + 100,
+  -- ***** What to send, and where *****
+  body:setting({
+    w = FULL_PCT,
     title = "Bind phrase",
     children = {
       {
-        type = lvgl.BOX,
-        x = 120 * lvgl.LCD_SCALE,
-        flexFlow = lvgl.FLOW_ROW,
-        flexPad = lvgl.PAD_MEDIUM,
-        children = {
-          {
-            type = lvgl.TEXT_EDIT,
-            w = 250 * lvgl.LCD_SCALE,
-            value = App.phrase,
-            -- A phrase must fit one un-chunked MSP_WRITE frame
-            length = msp.CONST.PHRASE_MAX,
-            set = function(v)
-              App.phrase = v
-            end,
-            active = App.isTargetReachableOrBoth,
-          },
-          {
-            type = lvgl.BUTTON,
-            text = "Set",
-            press = App.sendSet,
-            active = isSetEnabled,
-          },
-        },
+        type = lvgl.TEXT_EDIT,
+        x = LABEL_PCT,
+        w = VALUE_PCT,
+        value = App.phrase,
+        -- A phrase must fit one un-chunked MSP_WRITE frame
+        length = msp.CONST.PHRASE_MAX,
+        set = function(v)
+          App.phrase = v
+        end,
       },
     },
   })
 
-  -- ***** Target label + dropdown + Request UID button *****
-  tbox:setting({
-    w = lvgl.PERCENT_SIZE + 100,
-    title = "Target",
+  body:setting({
+    w = FULL_PCT,
+    title = "Apply to",
     children = {
       {
-        type = lvgl.BOX,
-        x = 120 * lvgl.LCD_SCALE,
-        flexFlow = lvgl.FLOW_ROW,
-        flexPad = lvgl.PAD_MEDIUM,
-        children = {
-          {
-            type = lvgl.CHOICE,
-            title = "Select Target",
-            values = { "Transmitter", "Receiver", "Both" },
-            get = function()
-              return App.target
-            end,
-            set = function(n)
-              App.target = n
-            end,
-          },
-          {
-            type = lvgl.BUTTON,
-            text = "Request UID",
-            press = App.startUidRequest,
-            active = App.isTargetReachable,
-          },
-          {
-            type = lvgl.BUTTON,
-            text = "Unbind",
-            press = App.sendUnbind,
-            visible = isRxSelected,
-            active = isRxSelectedConnected,
-          },
-        },
+        type = lvgl.CHOICE,
+        x = LABEL_PCT,
+        title = "Apply to",
+        values = TARGET_VALUES,
+        get = function()
+          return App.target
+        end,
+        set = App.setTarget,
       },
     },
   })
 
-  -- ***** Show Bind button if RX target selected and no RX connected *****
-  pg:box({
-    w = lvgl.PERCENT_SIZE + 100,
-    y = 2 * lvgl.UI_ELEMENT_HEIGHT + 4 * lvgl.PAD_MEDIUM,
+  -- A row of its own: the write is the one action here that changes a
+  -- device, and its label carries the sequence's progress.
+  body:button({
+    w = FULL_PCT,
+    text = setLabel,
+    press = App.sendSet,
+    active = App.isSetEnabled,
+  })
+
+  -- ***** What the devices report back *****
+  infoRow(body, "Transmitter", uidText)
+  infoRow(body, "Receiver", App.receiverText)
+
+  -- ***** Link actions *****
+  local actions = body:box({
+    w = FULL_PCT,
     flexFlow = lvgl.FLOW_ROW,
     flexPad = lvgl.PAD_MEDIUM,
-    align = LEFT,
-    visible = isRxSelectedDisconnected,
-    children = {
-      {
-        type = lvgl.LABEL,
-        w = 4 + lvgl.LCD_SCALE * (120 + 250),
-        text = " No receiver connected.\n Use Bind to set bindphrase if RX in bind mode",
-      },
-      {
-        type = lvgl.BUTTON,
-        text = "Bind",
-        press = App.sendBind,
-      },
-    },
+  })
+  actions:button({
+    w = lvgl.PERCENT_SIZE + 49,
+    text = "Bind",
+    press = pressBind,
+  })
+  actions:button({
+    w = lvgl.PERCENT_SIZE + 49,
+    text = "Unbind",
+    press = pressUnbind,
+    active = hasLink,
   })
 
-  -- ***** Bind Phrase History *****
-  local histSection = pg:box({
-    w = lvgl.PERCENT_SIZE + 100,
-    y = 2 * lvgl.UI_ELEMENT_HEIGHT + 4 * lvgl.PAD_MEDIUM,
+  -- ***** History, last: it grows and the page scrolls *****
+  local histSection = body:box({
+    w = FULL_PCT,
     flexFlow = lvgl.FLOW_COLUMN,
     flexPad = 0,
     visible = function()
-      return App.history.items[1] ~= nil and App.isTargetReachableOrBoth()
+      return App.history.items[1] ~= nil
     end,
   })
   histSection:label({
-    text = "Bind Phrase History",
-    w = lvgl.PERCENT_SIZE + 100,
+    text = "Bind phrase history",
+    w = FULL_PCT,
     align = CENTER,
   })
   for i = 1, App.history.MAX do
     local row = histSection:box({
-      w = lvgl.PERCENT_SIZE + 100,
+      w = FULL_PCT,
       flexFlow = lvgl.FLOW_ROW,
       flexPad = lvgl.PAD_SMALL,
       visible = function()
         return App.history.items[i] ~= nil
       end,
     })
-    -- Button containing a history item with its value
+    -- Fills the phrase field; sending stays with the Set button
     row:button({
       w = lvgl.PERCENT_SIZE + 80,
       text = function()
@@ -189,7 +198,6 @@ local function buildUi()
         App.useHistory(i)
       end,
     })
-    -- Button X to delete an item
     row:button({
       text = "X",
       textColor = COLOR_THEME_WARNING,
@@ -241,8 +249,8 @@ end
 -- ============================================================================
 
 -- Rebuild whenever App.rev moved: TEXT_EDIT's value is a build-time
--- snapshot, so a history fill or the Both flow's target flip only shows
--- through a fresh build.
+-- snapshot, so a history fill only shows through a fresh build. The UID
+-- rows, status line and button states are live getters and never need one.
 function UI.render(_event, _touchState)
   if UI.builtRev ~= App.rev then
     buildUi()

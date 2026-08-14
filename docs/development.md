@@ -43,14 +43,21 @@ The configuration tool, `SCRIPTS/TOOLS/ExpressLRS/`:
 
 The bind phrase manager, `SCRIPTS/TOOLS/ExpressLRSBind/` (sets the bind phrase / UID over MSP;
 the device side requires ExpressLRS 4.1+, and a pre-4.1 device simply never answers -- the tool's
-bounded UID retry reports that instead of polling forever):
+bounded UID retry reports that instead of polling forever).
+
+Only the transmitter's UID is read, and only on the events that can change it: the tool opening, a
+write completing, and the target selector moving. The receiver is never asked. It answers over the
+link, a link only exists between devices already sharing a UID, so its answer is the transmitter's
+number by construction; the link's presence carries the whole of what asking would have told us, and
+costs no over-air traffic. That is also why there is no manual refresh -- every event a "read UID"
+button existed to cover is one the App observes for itself:
 
 | Module | Purpose |
 |--------|---------|
-| `main.lua` | Entry point and the App layer: target selection (TX/RX/Both), phrase-vs-raw-UID parsing, the two-step Both sequence (RX first -- writing its phrase drops it off the link -- then TX), the bounded UID read retry, and the frame router over `crsf.drain` |
+| `main.lua` | Entry point and the App layer: target selection (TX/RX/Both), phrase-vs-raw-UID parsing, the two-step Both sequence (RX first -- writing its phrase drops it off the link -- then TX), the bounded transmitter UID probe, and the frame router over `crsf.drain` |
 | `history_storage.lua` | The last five phrases, newest first, persisted through `file_storage.lua` as indexed keys `h1`..`h5` |
 | `ui/lvgl.lua` | Color LCD interface |
-| `ui/lcd.lua` | BW LCD interface (line list, phrase editing through `ui/lcd/text_edit.lua`) |
+| `ui/lcd.lua` | BW LCD interface (line list, phrase editing through `ui/lcd/text_edit.lua`). Note `popupConfirmation`'s message argument never reaches the screen on BW: EdgeTX's Lua binding sets `warningInfoText` without `warningInfoLength` (`api_general.cpp` `luaPopupConfirmation`), so a confirmation has only its 24-char title (`WARNING_LINE_LEN`) to say what it needs |
 
 Both tools pick their UI chunk at runtime -- `local useLvgl = (lvgl ~= nil)` -- and load exactly one
 of `ui/lvgl.lua` or `ui/lcd.lua`; there are no per-radio builds.
@@ -123,13 +130,14 @@ The simulator supports multiple test scenarios, configurable via the `config.sce
 ### MSP bind traffic
 
 The mock answers the bind tool's MSP `RXTX_CONFIG` traffic: a UID read (`MSP_REQ`) is served from a
-per-device `mspUid` table -- the TX and RX deliberately start with different UIDs so a fresh `normal`
-run shows a mismatch that setting both to one phrase visibly fixes -- and a phrase write
-(`MSP_WRITE`) rederives the target's UID through a deterministic pseudo-hash, so equal phrases give
-equal UIDs (the property the Both flow demonstrates; the bytes need not match the firmware's MD5).
-The RX answers only while the scenario keeps it reachable, which is what exercises the tool's
-bounded retry, and writes are unacknowledged just like the real firmware. `FRAMETYPE_COMMAND`
-bind/unbind requests are log-only.
+per-device `mspUid` table, and a phrase write (`MSP_WRITE`) rederives the target's UID through a
+deterministic pseudo-hash, so equal phrases give equal UIDs (the property the Both flow
+demonstrates; the bytes need not match the firmware's MD5). Both devices start on the same UID,
+because a reachable receiver whose UID differs from the transmitter's is a state the radios cannot
+be in. The RX answers only while the scenario keeps it reachable, and writes are unacknowledged just
+like the real firmware. `FRAMETYPE_COMMAND` bind requests are log-only -- note that the firmware
+handles that command identically at either address (`EnterBindingModeSafely`), so the "unbind"
+button puts the receiver into bind mode rather than erasing its binding.
 
 `config.maxPacketBytes` (default 64, `CRSF_MAX_PACKET_LEN`) is the largest frame the mock handset
 link carries. Parameter entries longer than `maxPacketBytes - 8` are chunked exactly as
