@@ -36,6 +36,14 @@ CRSF.CONST = {
   FRAMETYPE_PARAMETER_READ = 0x2C,
   FRAMETYPE_PARAMETER_WRITE = 0x2D,
   FRAMETYPE_ELRS_STATUS = 0x2E,
+  FRAMETYPE_COMMAND = 0x32,
+  FRAMETYPE_MSP_REQ = 0x7A,
+  FRAMETYPE_MSP_RESP = 0x7B,
+  FRAMETYPE_MSP_WRITE = 0x7C,
+
+  -- COMMAND (0x32) subcommands (crsf_command_e / crsf_subcommand_e)
+  COMMAND_SUBCMD_RX = 0x10,
+  COMMAND_SUBCMD_RX_BIND = 0x01,
 
   -- Field types (for parsing PARAMETER_SETTINGS_ENTRY responses)
   FIELD_UINT8 = 0,
@@ -268,6 +276,19 @@ end
 -- The module answers with an ELRS_STATUS frame carrying its warning flags.
 function CRSF:requestElrsStatus()
   CRSF.push(CRSF.CONST.FRAMETYPE_PARAMETER_WRITE, { CRSF.CONST.ADDRESS_TX, CRSF.CONST.ADDRESS_HANDSET_ELRS, 0, 0 })
+end
+
+--- Send a COMMAND bind request. Addressed to the TX module it enters bind
+-- mode, transmitting to any RX waiting in bind mode; addressed to the RX it
+-- unbinds a connected receiver.
+-- @param dest  CRSF device address (use CRSF.CONST.ADDRESS_*); nil targets the TX
+function CRSF:sendBindCommand(dest)
+  CRSF.push(CRSF.CONST.FRAMETYPE_COMMAND, {
+    dest or CRSF.CONST.ADDRESS_TX,
+    CRSF.CONST.ADDRESS_HANDSET,
+    CRSF.CONST.COMMAND_SUBCMD_RX,
+    CRSF.CONST.COMMAND_SUBCMD_RX_BIND,
+  })
 end
 
 -- ============================================================================

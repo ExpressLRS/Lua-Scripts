@@ -11,6 +11,8 @@ local session = deps.session
 local crsf = deps.crsf
 local VERSION = deps.VERSION
 
+local SharedDialogs = loadScript("/SCRIPTS/ELRS/ui/lvgl/dialogs.lua")()
+
 -- ============================================================================
 -- UI state
 -- ============================================================================
@@ -109,56 +111,11 @@ function ModelMismatchDialog.show(onContinue, onExit)
 end
 
 -- ============================================================================
--- NoModuleDialog
+-- Startup dialogs (version gate, no module): SCRIPTS/ELRS/ui/lvgl/dialogs.lua
 -- ============================================================================
 
-local NoModuleDialog = {}
-
-function NoModuleDialog.show(onExit)
-  lvgl.clear()
-
-  local dg = lvgl.dialog({
-    title = "No Module Found: Check Model Settings",
-    flexFlow = lvgl.FLOW_COLUMN,
-    flexPad = lvgl.PAD_SMALL,
-    close = onExit,
-  })
-
-  dg:build({
-    {
-      type = lvgl.BOX,
-      x = 10,
-      flexFlow = lvgl.FLOW_COLUMN,
-      flexPad = lvgl.PAD_SMALL,
-      children = {
-        { type = lvgl.LABEL, text = "- Internal/External module enabled" },
-        { type = lvgl.LABEL, text = "- Protocol set to CRSF" },
-        { type = lvgl.LABEL, text = "- Minimum Baud rate (depends on packet rate):" },
-        { type = lvgl.LABEL, font = SMLSIZE, text = "  400k for 250Hz" },
-        { type = lvgl.LABEL, font = SMLSIZE, text = "  921k for 500Hz" },
-        { type = lvgl.LABEL, font = SMLSIZE, text = "  1.87M for F1000" },
-      },
-    },
-    {
-      type = lvgl.BOX,
-      w = lvgl.PERCENT_SIZE + 100,
-      align = CENTER,
-      flexFlow = lvgl.FLOW_ROW,
-      children = {
-        {
-          type = lvgl.BUTTON,
-          w = lvgl.PERCENT_SIZE + 98,
-          text = "Exit",
-          press = function()
-            dg:close()
-            onExit()
-          end,
-        },
-      },
-    },
-  })
-
-  return dg
+local function exitTool()
+  App.shouldExit = true
 end
 
 -- ============================================================================
@@ -345,86 +302,19 @@ function CommandPage.showExecuting(title, getInfo, onCancel)
 end
 
 -- ============================================================================
--- EdgeTX version check
--- ============================================================================
-
-local versionCheckResult = nil
-
-local function checkEdgeTxVersion()
-  local _ver, _radio, maj, minor, rev = getVersion()
-
-  if maj >= 3 then
-    return true
-  elseif maj == 2 and minor == 12 and rev >= 1 then
-    return true
-  elseif maj == 2 and minor == 11 and rev >= 6 then
-    return true
-  end
-
-  return false
-end
-
-local function showVersionRequired()
-  lvgl.clear()
-
-  local dg = lvgl.dialog({
-    title = "EdgeTX Version Not Supported",
-    flexFlow = lvgl.FLOW_COLUMN,
-    flexPad = lvgl.PAD_SMALL,
-    close = function()
-      App.shouldExit = true
-    end,
-  })
-
-  dg:build({
-    {
-      type = "box",
-      x = 10,
-      flexFlow = lvgl.FLOW_COLUMN,
-      flexPad = lvgl.PAD_SMALL,
-      children = {
-        { type = "label", text = "Requires EdgeTX:" },
-        { type = "label", text = "- 2.11.6 or later" },
-        { type = "label", text = "- 2.12.1 or later" },
-        { type = "label", text = "- 3.0 or later" },
-      },
-    },
-    {
-      type = "box",
-      flexFlow = lvgl.FLOW_ROW,
-      w = lvgl.PERCENT_SIZE + 100,
-      align = CENTER,
-      children = {
-        {
-          type = "button",
-          text = "Exit",
-          w = lvgl.PERCENT_SIZE + 98,
-          press = function()
-            dg:close()
-            App.shouldExit = true
-          end,
-        },
-      },
-    },
-  })
-end
-
--- ============================================================================
 -- Interface: init
 -- ============================================================================
 
-function UI.init()
-  versionCheckResult = checkEdgeTxVersion()
-end
+function UI.init() end
 
 -- ============================================================================
 -- Interface: preCheck (version gate)
 -- ============================================================================
 
 function UI.preCheck(_event)
-  if not versionCheckResult then
+  if not deps.versionOk then
     if not UI.uiBuilt then
-      showVersionRequired()
+      SharedDialogs.showVersionRequired(exitTool)
       UI.uiBuilt = true
     end
     if App.shouldExit then
@@ -468,9 +358,7 @@ end
 
 function UI.handleNoModule()
   if not UI.uiBuilt then
-    NoModuleDialog.show(function()
-      App.shouldExit = true
-    end)
+    SharedDialogs.showNoModule(exitTool)
     UI.uiBuilt = true
   end
 end

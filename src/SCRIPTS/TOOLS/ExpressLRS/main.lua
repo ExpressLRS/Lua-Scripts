@@ -15,22 +15,16 @@ local useLvgl = (lvgl ~= nil)
 -- Load shared modules
 -- ============================================================================
 
--- A full collection before each load frees the previous compile's parser
--- scratch; the firmware runs no GC between loadScript calls, so on a fresh
--- install (no .luac yet) the compile peaks would otherwise stack.
-local function loadPart(path, arg1, arg2)
-  collectgarbage("collect")
-  local chunk = loadScript(path)
-  if chunk == nil then
-    error(path)
-  end
-  return chunk(arg1, arg2)
-end
+-- The loader is the one shared part that must bootstrap with a bare
+-- loadScript; it owns the GC-before-load discipline.
+---@diagnostic disable-next-line: need-check-nil
+local loader = loadScript("/SCRIPTS/ELRS/loader.lua")()
 
-local crsf = loadPart("/SCRIPTS/ELRS/crsf.lua")
-local params = loadPart("/SCRIPTS/ELRS/crsf_params.lua", crsf)
-local CRSFSession = loadPart("/SCRIPTS/ELRS/crsf_session.lua", crsf, params)
-local Navigation = loadPart("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")
+local crsf = loader("/SCRIPTS/ELRS/crsf.lua")
+local params = loader("/SCRIPTS/ELRS/crsf_params.lua", crsf)
+local CRSFSession = loader("/SCRIPTS/ELRS/crsf_session.lua", crsf, params)
+local Navigation = loader("/SCRIPTS/TOOLS/ExpressLRS/navigation.lua")
+local versionOk = loader("/SCRIPTS/ELRS/edgetx_version.lua")()
 
 -- ============================================================================
 -- App Module: business logic between the session and the UI
@@ -143,11 +137,12 @@ local function init()
     session = session,
     crsf = crsf,
     VERSION = VERSION,
+    versionOk = versionOk,
   }
   if useLvgl then
-    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRS/ui/lvgl.lua", deps)
+    UI = loader("/SCRIPTS/TOOLS/ExpressLRS/ui/lvgl.lua", deps)
   else
-    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRS/ui/lcd.lua", deps)
+    UI = loader("/SCRIPTS/TOOLS/ExpressLRS/ui/lcd.lua", deps)
   end
   UI.init()
   -- The returned table stays on the standalone Lua stack and pins init(),

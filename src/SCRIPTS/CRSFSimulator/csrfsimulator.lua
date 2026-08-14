@@ -73,6 +73,16 @@ local CRSF = {
   FRAMETYPE_PARAMETER_READ = 0x2C,
   FRAMETYPE_PARAMETER_WRITE = 0x2D,
   FRAMETYPE_ELRS_STATUS = 0x2E,
+  FRAMETYPE_COMMAND = 0x32,
+  FRAMETYPE_MSP_REQ = 0x7A,
+  FRAMETYPE_MSP_RESP = 0x7B,
+  FRAMETYPE_MSP_WRITE = 0x7C,
+
+  -- MSP-over-CRSF (single-frame v1: version 1 | start-of-frame | seq 0)
+  MSP_HEADER_V1 = 0x30,
+  MSP_ELRS_RXTX_CONFIG = 0x2D,
+  MSP_RXTX_UID = 0x00,
+  MSP_RXTX_BIND_PHRASE = 0x01,
 
   -- Addresses
   ADDRESS_BROADCAST = 0x00,
@@ -723,8 +733,8 @@ local rxDevice = {
       id = 3,
       parent = 0,
       type = CRSF.TEXT_SELECTION,
-      name = "Ant. Mode",
-      options = "Antenna A;Antenna B;Diversity",
+      name = "Antenna Mode",
+      options = "Antenna 1;Antenna 2;Diversity",
       value = 2,
       units = "",
     },
@@ -1245,6 +1255,53 @@ local function handleCommandWrite(device, param, newStatus)
 end
 
 -- ============================================================================
+-- MSP bind UID state
+-- ============================================================================
+
+-- Per-device bind UID, read and written over MSP RXTX_CONFIG. Both start
+-- on the same UID: a receiver only answers over a link, and a link only
+-- exists between devices that already share one, so a reachable RX whose
+-- UID differs from the TX's is a state the radios cannot be in.
+local mspUid = {
+  [CRSF.ADDRESS_TX] = { 13, 213, 105, 32, 0, 1 },
+  [CRSF.ADDRESS_RX] = { 13, 213, 105, 32, 0, 1 },
+}
+
+--- Derive a deterministic 6-byte UID from bind-phrase bytes: the same
+-- phrase always yields the same UID, so a phrase written to both devices
+-- produces matching UIDs. Equality is the property the tool demonstrates;
+-- the bytes themselves need not match the firmware's MD5 derivation.
+local function deriveUid(chars)
+  local uid = { 0, 0, 0, 0, 0, 0 }
+  local acc = 0
+  for i = 1, #chars do
+    acc = (acc + chars[i] * i) % 251
+    local slot = (i - 1) % 6 + 1
+    uid[slot] = (uid[slot] + acc + chars[i]) % 256
+  end
+  return uid
+end
+
+--- Build an MSP_RESP payload answering a RXTX_CONFIG/UID read.
+-- Layout mirrors the request: header, size (subcmd + 6 bytes), fn, subcmd.
+local function encodeMspUidResponse(deviceId, destAddr, uid)
+  return {
+    destAddr,
+    deviceId,
+    CRSF.MSP_HEADER_V1,
+    7,
+    CRSF.MSP_ELRS_RXTX_CONFIG,
+    CRSF.MSP_RXTX_UID,
+    uid[1],
+    uid[2],
+    uid[3],
+    uid[4],
+    uid[5],
+    uid[6],
+  }
+end
+
+-- ============================================================================
 -- mockPush: Processes commands sent by the Lua script
 -- ============================================================================
 
@@ -1455,6 +1512,46 @@ local function mockPush(command, data)
         end
       end
     end
+    return true
+  elseif command == CRSF.FRAMETYPE_MSP_REQ then
+    -- MSP read: data = { deviceId, handsetId, header, size, fn, subcmd }
+    local deviceId = data[1]
+    local replyTo = data[2] or CRSF.ADDRESS_HANDSET
+    if data[5] == CRSF.MSP_ELRS_RXTX_CONFIG and data[6] == CRSF.MSP_RXTX_UID then
+      if deviceId == CRSF.ADDRESS_TX then
+        queuePush(CRSF.FRAMETYPE_MSP_RESP, encodeMspUidResponse(deviceId, replyTo, mspUid[deviceId]))
+      elseif deviceId == CRSF.ADDRESS_RX and isRxAvailable() then
+        -- Relayed over the air: arrives in the next poll cycle. An absent RX
+        -- answers nothing, which is what drives the tool's bounded retry.
+        queuePushDeferred(CRSF.FRAMETYPE_MSP_RESP, encodeMspUidResponse(deviceId, replyTo, mspUid[deviceId]))
+      end
+    end
+    return true
+  elseif command == CRSF.FRAMETYPE_MSP_WRITE then
+    -- MSP write: data = { deviceId, handsetId, header, size, fn, subcmd, ... }.
+    -- The firmware sends no acknowledgement; the tool re-reads the UID.
+    local deviceId = data[1]
+    local reachable = deviceId == CRSF.ADDRESS_TX or (deviceId == CRSF.ADDRESS_RX and isRxAvailable())
+    if data[5] == CRSF.MSP_ELRS_RXTX_CONFIG and reachable then
+      if data[6] == CRSF.MSP_RXTX_BIND_PHRASE then
+        -- size counts subcmd + phrase bytes, so the phrase ends at data[5 + size]
+        local chars = {}
+        for i = 7, 5 + (data[4] or 0) do
+          chars[#chars + 1] = data[i]
+        end
+        mspUid[deviceId] = deriveUid(chars)
+      elseif data[6] == CRSF.MSP_RXTX_UID then
+        local uid = {}
+        for i = 1, 6 do
+          uid[i] = data[6 + i] or 0
+        end
+        mspUid[deviceId] = uid
+      end
+    end
+    return true
+  elseif command == CRSF.FRAMETYPE_COMMAND then
+    -- Bind/unbind requests. Log-only: the push line above already records
+    -- the destination, and the mock has no bound-state to change.
     return true
   end
 

@@ -7,6 +7,9 @@
 -- typing and defaults belong to the caller.                             --
 ---------------------------------------------------------------------------
 
+-- B&W EdgeTX ships without the table library; the shim routes around it.
+local shim = loadScript("/SCRIPTS/ELRS/shim.lua")()
+
 local FileStorage = {}
 
 -- A settings file is a handful of short lines; one bounded read keeps the
@@ -68,10 +71,10 @@ function FileStorage.write(path, keys, values)
   for i = 1, #keys do
     local val = values[keys[i]]
     if val ~= nil then
-      lines[#lines + 1] = table.concat({ keys[i], "=", val, "\n" })
+      lines[#lines + 1] = shim.tableConcat({ keys[i], "=", val, "\n" })
     end
   end
-  io.write(f, table.concat(lines))
+  io.write(f, shim.tableConcat(lines))
   io.close(f)
   return true
 end
