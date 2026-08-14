@@ -1,6 +1,6 @@
 # Development
 
-This document covers the internal architecture of the ExpressLRS configuration tool and the CRSF simulator used for testing inside the EdgeTX simulator without real hardware.
+This document covers the internal architecture of the ExpressLRS tools and the CRSF simulator used for testing inside the EdgeTX simulator without real hardware.
 
 ## Make targets
 
@@ -32,6 +32,8 @@ Run `make help` to list all targets. The Makefile groups them into three categor
 
 ## Architecture
 
+The configuration tool, `SCRIPTS/TOOLS/ExpressLRS/`:
+
 | Module | Purpose |
 |--------|---------|
 | `main.lua` | Entry point, run-loop orchestrator, and the App policy layer (device switching, folder-ready edges, the synthetic "Other Devices" row types) over a `crsf_session.lua` instance |
@@ -39,7 +41,21 @@ Run `make help` to list all targets. The Makefile groups them into three categor
 | `ui/lvgl.lua` | Color LCD interface (LVGL dialogs, command pages, warnings) |
 | `ui/lcd.lua` | BW LCD interface (text cursor, popups) |
 
-The tool builds on the shared `SCRIPTS/ELRS/` library, which the widgets use too:
+The bind phrase manager, `SCRIPTS/TOOLS/ExpressLRSBind/` (sets the bind phrase / UID over MSP;
+the device side requires ExpressLRS 4.1+, and a pre-4.1 device simply never answers -- the tool's
+bounded UID retry reports that instead of polling forever):
+
+| Module | Purpose |
+|--------|---------|
+| `main.lua` | Entry point and the App layer: target selection (TX/RX/Both), phrase-vs-raw-UID parsing, the two-step Both sequence (RX first -- writing its phrase drops it off the link -- then TX), the bounded UID read retry, and the frame router over `crsf.drain` |
+| `history_storage.lua` | The last five phrases, newest first, persisted through `file_storage.lua` as indexed keys `h1`..`h5` |
+| `ui/lvgl.lua` | Color LCD interface |
+| `ui/lcd.lua` | BW LCD interface (line list, phrase editing through `ui/lcd/text_edit.lua`) |
+
+Both tools pick their UI chunk at runtime -- `local useLvgl = (lvgl ~= nil)` -- and load exactly one
+of `ui/lvgl.lua` or `ui/lcd.lua`; there are no per-radio builds.
+
+The tools build on the shared `SCRIPTS/ELRS/` library, which the widgets use too:
 
 | Module | Purpose |
 |--------|---------|
@@ -47,15 +63,19 @@ The tool builds on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 | `SCRIPTS/ELRS/crsf_params.lua` | Opt-in parameter codec: `PARAMETER_SETTINGS_ENTRY` chunk reassembly over a caller-owned rx table and per-type decode, plus encoders that return `PARAMETER_READ`/`WRITE`, command-step and suppress-critical-errors frames for the caller to push. Loaded by the tool and the VTX Admin widget |
 | `SCRIPTS/ELRS/crsf_session.lua` | Opt-in stateful parameter client (`CRSFSession.new`, multi-instance): field store, load queue and retry scheduler, paced write queue, command state machine, and optional device discovery, link status and ELRS 1.x detection. Loaded by the tool and the VTX Admin widget |
 | `SCRIPTS/ELRS/crsf_elrsinfo.lua` | Opt-in TX-module state: DEVICE_INFO cache, version-keyed RFMOD/RFRSSI tables, per-connection model-match latch. Loaded only by the telemetry widget |
+| `SCRIPTS/ELRS/msp.lua` | Opt-in MSP-over-CRSF codec: stateless encoders returning `(frameType, payload)` for `MSP_REQ`/`MSP_WRITE` and decoders for single-frame v1 `MSP_RESP`, plus the ELRS `RXTX_CONFIG` UID/phrase helpers. Loaded only by the bind tool |
+| `SCRIPTS/ELRS/defer.lua` | Single-slot `setTimeout`/`poll` timer; scheduling replaces the pending callback, which is what cancels a stale retry when a new action starts. Loaded only by the bind tool |
+| `SCRIPTS/ELRS/ui/lcd/text_edit.lua` | BW text editor replicating the firmware's `editName()` model-name semantics (rotary cycles the char, ENTER advances, long ENTER toggles case or commits on a space). Loaded only by the bind tool's BW UI. `ui/<display>/` is the library's home for shared UI components, mirroring the tools' own `ui/` split |
 | `SCRIPTS/ELRS/sensors.lua` | Generic EdgeTX telemetry reader (`getSensorValue` with a cached name-to-ID lookup), not CRSF-specific. Loaded by `crsf.lua`, which exposes it to every consumer as `crsf.getSensorValue` |
-| `SCRIPTS/ELRS/file_storage.lua` | Generic key=value file persistence (`read`/`write`), schema-free. Loaded only by the VTX Admin widget |
+| `SCRIPTS/ELRS/file_storage.lua` | Generic key=value file persistence (`read`/`write`), schema-free. Loaded by the VTX Admin widget and the bind tool |
 | `SCRIPTS/ELRS/shim.lua` | `table.concat` polyfill for BW radios |
 
 Frames are consumed pull-style. `crossfireTelemetryPop()` is destructive per script instance, and
 the firmware delivers every widget instance its own copy of each incoming frame, so **each script
-instance has exactly one draining consumer**: the tool and the VTX Admin widget drain through
-`session:drain()`, the telemetry widget through `elrsinfo:drain()`. A future widget needing two
-consumers must pop once and route the frames itself. `reassemble()` callers pass the field id they
+instance has exactly one draining consumer**: the config tool and the VTX Admin widget drain through
+`session:drain()`, the telemetry widget through `elrsinfo:drain()`, and the bind tool through
+`crsf.drain(App, App.onFrame)`. A future widget needing two consumers must pop once and route the
+frames itself. `reassemble()` callers pass the field id they
 are waiting for (strict), or `data[3]` to accept any field from their device (`acceptUnsolicited`,
 used by VTX Admin so sibling instances stay in sync from each other's answers).
 
@@ -95,6 +115,17 @@ The simulator supports multiple test scenarios, configurable via the `config.sce
 | `slow_loading` | Parameter reads delayed by ~2 seconds each. Tests loading UI states. |
 | `no_module` | No CRSF module found. Triggers "No Module Found" error dialog. |
 | `critical_error` | TX + RX connected with a critical baud-rate error flag. Triggers the warning screen; the suppress write clears it. |
+
+### MSP bind traffic
+
+The mock answers the bind tool's MSP `RXTX_CONFIG` traffic: a UID read (`MSP_REQ`) is served from a
+per-device `mspUid` table -- the TX and RX deliberately start with different UIDs so a fresh `normal`
+run shows a mismatch that setting both to one phrase visibly fixes -- and a phrase write
+(`MSP_WRITE`) rederives the target's UID through a deterministic pseudo-hash, so equal phrases give
+equal UIDs (the property the Both flow demonstrates; the bytes need not match the firmware's MD5).
+The RX answers only while the scenario keeps it reachable, which is what exercises the tool's
+bounded retry, and writes are unacknowledged just like the real firmware. `FRAMETYPE_COMMAND`
+bind/unbind requests are log-only.
 
 `config.maxPacketBytes` (default 64, `CRSF_MAX_PACKET_LEN`) is the largest frame the mock handset
 link carries. Parameter entries longer than `maxPacketBytes - 8` are chunked exactly as

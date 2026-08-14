@@ -1,6 +1,6 @@
 # ExpressLRS Lua Scripts
 
-Lua configuration tool for ExpressLRS on EdgeTX radios. Works on both black & white LCD and color LCD radios.
+Lua configuration tool and bind phrase manager for ExpressLRS on EdgeTX radios. Both work on black & white LCD and color LCD radios.
 
 The package also includes two color-LCD widgets: the **ELRS Telemetry Widget** and the **VTX Administrator Widget**.
 
@@ -22,11 +22,24 @@ SCRIPTS/
     crsf_params.lua           -- parameter codec (tool, VTX Admin)
     crsf_session.lua          -- stateful parameter client (tool, VTX Admin)
     crsf_elrsinfo.lua         -- TX module info state (telemetry widget)
+    msp.lua                   -- MSP-over-CRSF codec (bind tool)
+    defer.lua                 -- deferred-callback timer (bind tool)
+    ui/
+      lcd/
+        text_edit.lua         -- BW text editor (bind tool)
+    sensors.lua               -- telemetry sensor reader
+    file_storage.lua          -- key=value file persistence
     shim.lua                  -- BW compatibility shim
   TOOLS/
     ExpressLRS/
       main.lua                -- entry point
       navigation.lua          -- folder navigation
+      ui/
+        lvgl.lua              -- color LCD UI (LVGL)
+        lcd.lua               -- black & white LCD UI
+    ExpressLRSBind/
+      main.lua                -- entry point
+      history_storage.lua     -- bind phrase history persistence
       ui/
         lvgl.lua              -- color LCD UI (LVGL)
         lcd.lua               -- black & white LCD UI
@@ -44,7 +57,7 @@ WIDGETS/
       ...
 ```
 
-The shared library `SCRIPTS/ELRS/` is required by the configuration tool and both widgets.
+The shared library `SCRIPTS/ELRS/` is required by both tools and both widgets.
 
 ### Install with edgetx-cli
 
@@ -63,6 +76,18 @@ The main tool (`SCRIPTS/TOOLS/ExpressLRS/`) lets you configure your ExpressLRS t
 <img src="screenshots/tool_main_bw.png" width="256" alt="ExpressLRS Configuration Tool"><br/>
 
 <img src="screenshots/tool_main.png" width="472" alt="ExpressLRS Configuration Tool">
+
+## ExpressLRS Bind Phrase Manager
+
+The bind tool (`SCRIPTS/TOOLS/ExpressLRSBind/`) sets the bind phrase -- or a raw UID entered as
+comma-separated bytes -- on the transmitter, the receiver, or both in one sequence, reads the
+current UID back for verification, and can put the TX in bind mode or unbind a connected receiver.
+The last five phrases are kept as a pick-and-send history. Setting the phrase over MSP requires
+**ExpressLRS 4.1+** on the device.
+
+<img src="screenshots/tool_bind_bw.png" width="256" alt="ExpressLRS Bind Phrase Manager"><br/>
+
+<img src="screenshots/tool_bind.png" width="472" alt="ExpressLRS Bind Phrase Manager">
 
 ## Widgets
 
@@ -92,3 +117,6 @@ See [docs/development.md](docs/development.md) for the tool's internal architect
 |------------|----------|------------|
 | Black & white LCD | EdgeTX 2.11.6+, 2.12.1+, or 3.0+ | v3.5.4+ |
 | Color LCD | EdgeTX 2.11.6+, 2.12.1+, or 3.0+ | v3.5.4+ |
+
+The bind phrase manager additionally requires **ExpressLRS 4.1+** on the device for its MSP
+configuration support; on older firmware it reports "No response (needs ELRS 4.1+)".

@@ -13,6 +13,8 @@ package:
   screenshots:
     - screenshots/tool_main.png
     - screenshots/tool_main_bw.png
+    - screenshots/tool_bind.png
+    - screenshots/tool_bind_bw.png
     - screenshots/widget_telemetry_fullscren.png
     - screenshots/widget_vtxadmin_fullscreen.png
     - screenshots/widgets.png
