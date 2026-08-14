@@ -9,6 +9,8 @@ local App = deps.App
 local crsf = deps.crsf
 local msp = deps.msp
 
+local SharedDialogs = loadScript("/SCRIPTS/ELRS/ui/lvgl/dialogs.lua")()
+
 -- ============================================================================
 -- UI state
 -- ============================================================================
@@ -19,98 +21,6 @@ local UI = {
   -- Guards the one-shot version/no-module dialogs.
   dialogBuilt = false,
 }
-
--- ============================================================================
--- EdgeTX version gate
--- ============================================================================
-
-local function showVersionRequired()
-  lvgl.clear()
-
-  local dg = lvgl.dialog({
-    title = "EdgeTX Version Not Supported",
-    flexFlow = lvgl.FLOW_COLUMN,
-    flexPad = lvgl.PAD_SMALL,
-    close = function()
-      App.shouldExit = true
-    end,
-  })
-
-  dg:build({
-    {
-      type = "box",
-      x = 10,
-      flexFlow = lvgl.FLOW_COLUMN,
-      flexPad = lvgl.PAD_SMALL,
-      children = {
-        { type = "label", text = "Requires EdgeTX:" },
-        { type = "label", text = "- 2.11.6 or later" },
-        { type = "label", text = "- 2.12.1 or later" },
-        { type = "label", text = "- 3.0 or later" },
-      },
-    },
-    {
-      type = "box",
-      flexFlow = lvgl.FLOW_ROW,
-      w = lvgl.PERCENT_SIZE + 100,
-      align = CENTER,
-      children = {
-        {
-          type = "button",
-          text = "Exit",
-          w = lvgl.PERCENT_SIZE + 98,
-          press = function()
-            dg:close()
-            App.shouldExit = true
-          end,
-        },
-      },
-    },
-  })
-end
-
-local function showNoModule()
-  lvgl.clear()
-
-  local dg = lvgl.dialog({
-    title = "No Module Found: Check Model Settings",
-    flexFlow = lvgl.FLOW_COLUMN,
-    flexPad = lvgl.PAD_SMALL,
-    close = function()
-      App.shouldExit = true
-    end,
-  })
-
-  dg:build({
-    {
-      type = lvgl.BOX,
-      x = 10,
-      flexFlow = lvgl.FLOW_COLUMN,
-      flexPad = lvgl.PAD_SMALL,
-      children = {
-        { type = lvgl.LABEL, text = "- Internal/External module enabled" },
-        { type = lvgl.LABEL, text = "- Protocol set to CRSF" },
-      },
-    },
-    {
-      type = lvgl.BOX,
-      w = lvgl.PERCENT_SIZE + 100,
-      align = CENTER,
-      flexFlow = lvgl.FLOW_ROW,
-      children = {
-        {
-          type = lvgl.BUTTON,
-          w = lvgl.PERCENT_SIZE + 98,
-          text = "Exit",
-          press = function()
-            dg:close()
-            App.shouldExit = true
-          end,
-        },
-      },
-    },
-  })
-end
 
 -- ============================================================================
 -- Main page
@@ -303,7 +213,7 @@ function UI.init() end
 function UI.preCheck(_event)
   if not deps.versionOk then
     if not UI.dialogBuilt then
-      showVersionRequired()
+      SharedDialogs.showVersionRequired(exitTool)
       UI.dialogBuilt = true
     end
     if App.shouldExit then
@@ -321,7 +231,7 @@ end
 
 function UI.handleNoModule()
   if not UI.dialogBuilt then
-    showNoModule()
+    SharedDialogs.showNoModule(exitTool)
     UI.dialogBuilt = true
   end
 end
