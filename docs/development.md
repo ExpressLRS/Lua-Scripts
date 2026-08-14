@@ -67,6 +67,7 @@ The tools build on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 | `SCRIPTS/ELRS/defer.lua` | Single-slot `setTimeout`/`poll` timer; scheduling replaces the pending callback, which is what cancels a stale retry when a new action starts. Loaded only by the bind tool |
 | `SCRIPTS/ELRS/ui/lcd/text_edit.lua` | BW text editor replicating the firmware's `editName()` model-name semantics (rotary cycles the char, ENTER advances, long ENTER toggles case or commits on a space). Loaded only by the bind tool's BW UI. `ui/<display>/` is the library's home for shared UI components, mirroring the tools' own `ui/` split |
 | `SCRIPTS/ELRS/loader.lua` | The tools' GC-guarded script loader: a full collection before each `loadScript` keeps fresh-install compile peaks from stacking. The one part consumers bootstrap with a bare `loadScript` |
+| `SCRIPTS/ELRS/edgetx_version.lua` | The one home of the minimum EdgeTX requirement (2.11.6 / 2.12.1 / 3.0). Each tool's `main.lua` checks it once and hands `deps.versionOk` to its UI chunk, whose `preCheck` owns the presentation. Keep `min_edgetx_version` in `edgetx.yml` in step |
 | `SCRIPTS/ELRS/sensors.lua` | Generic EdgeTX telemetry reader (`getSensorValue` with a cached name-to-ID lookup), not CRSF-specific. Loaded by `crsf.lua`, which exposes it to every consumer as `crsf.getSensorValue` |
 | `SCRIPTS/ELRS/file_storage.lua` | Generic key=value file persistence (`read`/`write`), schema-free. Loaded by the VTX Admin widget and the bind tool |
 | `SCRIPTS/ELRS/shim.lua` | `table.concat` polyfill for BW radios |

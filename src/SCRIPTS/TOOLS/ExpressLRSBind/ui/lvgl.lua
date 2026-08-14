@@ -24,22 +24,6 @@ local UI = {
 -- EdgeTX version gate
 -- ============================================================================
 
-local versionCheckResult = nil
-
-local function checkEdgeTxVersion()
-  local _ver, _radio, maj, minor, rev = getVersion()
-
-  if maj >= 3 then
-    return true
-  elseif maj == 2 and minor == 12 and rev >= 1 then
-    return true
-  elseif maj == 2 and minor == 11 and rev >= 6 then
-    return true
-  end
-
-  return false
-end
-
 local function showVersionRequired()
   lvgl.clear()
 
@@ -310,16 +294,14 @@ end
 -- Interface: init
 -- ============================================================================
 
-function UI.init()
-  versionCheckResult = checkEdgeTxVersion()
-end
+function UI.init() end
 
 -- ============================================================================
 -- Interface: preCheck (version gate)
 -- ============================================================================
 
 function UI.preCheck(_event)
-  if not versionCheckResult then
+  if not deps.versionOk then
     if not UI.dialogBuilt then
       showVersionRequired()
       UI.dialogBuilt = true

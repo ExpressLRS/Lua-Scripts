@@ -11,22 +11,6 @@ local session = deps.session
 local crsf = deps.crsf
 local VERSION = deps.VERSION
 
-local versionCheckResult = nil
-
-local function checkEdgeTxVersion()
-  local _ver, _radio, maj, minor, rev = getVersion()
-
-  if maj >= 3 then
-    return true
-  elseif maj == 2 and minor == 12 and rev >= 1 then
-    return true
-  elseif maj == 2 and minor == 11 and rev >= 6 then
-    return true
-  end
-
-  return false
-end
-
 -- ============================================================================
 -- UI state
 -- ============================================================================
@@ -80,8 +64,6 @@ function UI.init()
   if LCD_H == 96 then
     UI.maxLineIndex = 9
   end
-
-  versionCheckResult = checkEdgeTxVersion()
 end
 
 -- ============================================================================
@@ -89,7 +71,7 @@ end
 -- ============================================================================
 
 function UI.preCheck(event)
-  if not versionCheckResult then
+  if not deps.versionOk then
     UI.drawAlert("Unsupported", {
       "Requires EdgeTX:",
       "- 2.11.6 or later",

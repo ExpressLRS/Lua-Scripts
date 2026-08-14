@@ -12,22 +12,6 @@ local VERSION = deps.VERSION
 
 local TextEdit = loadScript("/SCRIPTS/ELRS/ui/lcd/text_edit.lua")()
 
-local versionCheckResult = nil
-
-local function checkEdgeTxVersion()
-  local _ver, _radio, maj, minor, rev = getVersion()
-
-  if maj >= 3 then
-    return true
-  elseif maj == 2 and minor == 12 and rev >= 1 then
-    return true
-  elseif maj == 2 and minor == 11 and rev >= 6 then
-    return true
-  end
-
-  return false
-end
-
 -- ============================================================================
 -- UI state
 -- ============================================================================
@@ -89,8 +73,6 @@ function UI.init()
   -- The phrase window ends at the cursor; 6 px per char of the fixed BW font
   UI.phraseEdit = TextEdit.new(msp.CONST.PHRASE_MAX, math.floor((LCD_W - UI.COL2 - 2) / 6))
   UI.phraseEdit.value = App.phrase
-
-  versionCheckResult = checkEdgeTxVersion()
 end
 
 -- ============================================================================
@@ -98,7 +80,7 @@ end
 -- ============================================================================
 
 function UI.preCheck(event)
-  if not versionCheckResult then
+  if not deps.versionOk then
     UI.drawAlert("Unsupported", {
       "Requires EdgeTX:",
       "- 2.11.6 or later",

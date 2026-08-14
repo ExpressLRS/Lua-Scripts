@@ -25,6 +25,7 @@ SCRIPTS/
     msp.lua                   -- MSP-over-CRSF codec (bind tool)
     defer.lua                 -- deferred-callback timer (bind tool)
     loader.lua                -- GC-guarded script loader (both tools)
+    edgetx_version.lua        -- EdgeTX minimum-version gate (both tools)
     ui/
       lcd/
         text_edit.lua         -- BW text editor (bind tool)

@@ -25,6 +25,7 @@ local msp = loader("/SCRIPTS/ELRS/msp.lua", crsf)
 local defer = loader("/SCRIPTS/ELRS/defer.lua")
 local FileStorage = loader("/SCRIPTS/ELRS/file_storage.lua")
 local History = loader("/SCRIPTS/TOOLS/ExpressLRSBind/history_storage.lua", FileStorage)
+local versionOk = loader("/SCRIPTS/ELRS/edgetx_version.lua")()
 
 -- ============================================================================
 -- App Module: business logic shared by both UI frontends
@@ -279,6 +280,7 @@ local function init()
     crsf = crsf,
     msp = msp,
     VERSION = VERSION,
+    versionOk = versionOk,
   }
   App.phrase = History.items[1] or ""
   if useLvgl then
