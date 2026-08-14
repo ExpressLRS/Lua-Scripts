@@ -29,6 +29,7 @@ SCRIPTS/
     ui/
       lcd/
         text_edit.lua         -- BW text editor (bind tool)
+        alert.lua             -- BW alert screen (both tools)
     sensors.lua               -- telemetry sensor reader
     file_storage.lua          -- key=value file persistence
     shim.lua                  -- BW compatibility shim

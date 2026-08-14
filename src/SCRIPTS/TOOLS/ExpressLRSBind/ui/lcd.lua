@@ -11,6 +11,7 @@ local msp = deps.msp
 local VERSION = deps.VERSION
 
 local TextEdit = loadScript("/SCRIPTS/ELRS/ui/lcd/text_edit.lua")()
+local drawAlert = loadScript("/SCRIPTS/ELRS/ui/lcd/alert.lua")()
 
 -- ============================================================================
 -- UI state
@@ -81,7 +82,7 @@ end
 
 function UI.preCheck(event)
   if not deps.versionOk then
-    UI.drawAlert("Unsupported", {
+    drawAlert("Unsupported", {
       "Requires EdgeTX:",
       "- 2.11.6 or later",
       "- 2.12.1 or later",
@@ -101,7 +102,7 @@ end
 -- ============================================================================
 
 function UI.handleNoModule()
-  UI.drawAlert(" No ExpressLRS", {
+  drawAlert(" No ExpressLRS", {
     "Enable a CRSF Internal",
     "  or External module in",
     "      Model settings",
@@ -109,21 +110,6 @@ function UI.handleNoModule()
     "also set Internal RF to",
     "CRSF in SYS->Hardware",
   })
-end
-
--- ============================================================================
--- Alert screen (clear screen + title + body messages)
--- ============================================================================
-
-function UI.drawAlert(title, msgs)
-  lcd.clear()
-  local y = 0
-  lcd.drawText(2, y, title, MIDSIZE)
-  y = y + (UI.textSize * 2) - 2
-  for _, msg in ipairs(msgs) do
-    lcd.drawText(2, y, msg)
-    y = y + UI.textSize
-  end
 end
 
 -- ============================================================================

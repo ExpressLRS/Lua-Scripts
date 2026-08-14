@@ -11,6 +11,8 @@ local session = deps.session
 local crsf = deps.crsf
 local VERSION = deps.VERSION
 
+local drawAlert = loadScript("/SCRIPTS/ELRS/ui/lcd/alert.lua")()
+
 -- ============================================================================
 -- UI state
 -- ============================================================================
@@ -72,7 +74,7 @@ end
 
 function UI.preCheck(event)
   if not deps.versionOk then
-    UI.drawAlert("Unsupported", {
+    drawAlert("Unsupported", {
       "Requires EdgeTX:",
       "- 2.11.6 or later",
       "- 2.12.1 or later",
@@ -119,7 +121,7 @@ end
 -- ============================================================================
 
 function UI.handleNoModule()
-  UI.drawAlert(" No ExpressLRS", {
+  drawAlert(" No ExpressLRS", {
     "Enable a CRSF Internal",
     "  or External module in",
     "      Model settings",
@@ -134,7 +136,7 @@ end
 -- ============================================================================
 
 function UI.handleUnsupported()
-  UI.drawAlert("Unsupported Firmware", {
+  drawAlert("Unsupported Firmware", {
     "ELRS 1.x firmware detected.",
     "Please update to 3.x.",
   })
@@ -175,7 +177,7 @@ function UI.render(event, _touchState)
       App.shouldExit = true
       return
     end
-    UI.drawAlert("Model Mismatch", {
+    drawAlert("Model Mismatch", {
       "RX connected but",
       "Model ID doesn't match.",
       "Toggle Model Match",
@@ -200,30 +202,6 @@ function UI.render(event, _touchState)
   elseif event ~= 0 or UI.forceRedraw or UI.edit then
     UI.drawPage(event)
     UI.forceRedraw = false
-  end
-end
-
--- ============================================================================
--- Alert screen (clear screen + title + body messages)
--- ============================================================================
-
-function UI.drawAlert(title, msgs, actions)
-  lcd.clear()
-  local y = 0
-  lcd.drawText(2, y, title, MIDSIZE)
-  y = y + (UI.textSize * 2) - 2
-  for _, msg in ipairs(msgs) do
-    lcd.drawText(2, y, msg)
-    y = y + UI.textSize
-  end
-  if actions then
-    y = y + UI.textSize
-    if actions.left then
-      lcd.drawText(2, y, actions.left, 0)
-    end
-    if actions.right then
-      lcd.drawText(LCD_W - 2, y, actions.right, RIGHT)
-    end
   end
 end
 
