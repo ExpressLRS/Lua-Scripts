@@ -15,23 +15,16 @@ local useLvgl = (lvgl ~= nil)
 -- Load shared modules
 -- ============================================================================
 
--- A full collection before each load frees the previous compile's parser
--- scratch; the firmware runs no GC between loadScript calls, so on a fresh
--- install (no .luac yet) the compile peaks would otherwise stack.
-local function loadPart(path, arg1)
-  collectgarbage("collect")
-  local chunk = loadScript(path)
-  if chunk == nil then
-    error(path)
-  end
-  return chunk(arg1)
-end
+-- The loader is the one shared part that must bootstrap with a bare
+-- loadScript; it owns the GC-before-load discipline.
+---@diagnostic disable-next-line: need-check-nil
+local loader = loadScript("/SCRIPTS/ELRS/loader.lua")()
 
-local crsf = loadPart("/SCRIPTS/ELRS/crsf.lua")
-local msp = loadPart("/SCRIPTS/ELRS/msp.lua", crsf)
-local defer = loadPart("/SCRIPTS/ELRS/defer.lua")
-local FileStorage = loadPart("/SCRIPTS/ELRS/file_storage.lua")
-local History = loadPart("/SCRIPTS/TOOLS/ExpressLRSBind/history_storage.lua", FileStorage)
+local crsf = loader("/SCRIPTS/ELRS/crsf.lua")
+local msp = loader("/SCRIPTS/ELRS/msp.lua", crsf)
+local defer = loader("/SCRIPTS/ELRS/defer.lua")
+local FileStorage = loader("/SCRIPTS/ELRS/file_storage.lua")
+local History = loader("/SCRIPTS/TOOLS/ExpressLRSBind/history_storage.lua", FileStorage)
 
 -- ============================================================================
 -- App Module: business logic shared by both UI frontends
@@ -289,9 +282,9 @@ local function init()
   }
   App.phrase = History.items[1] or ""
   if useLvgl then
-    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRSBind/ui/lvgl.lua", deps)
+    UI = loader("/SCRIPTS/TOOLS/ExpressLRSBind/ui/lvgl.lua", deps)
   else
-    UI = loadPart("/SCRIPTS/TOOLS/ExpressLRSBind/ui/lcd.lua", deps)
+    UI = loader("/SCRIPTS/TOOLS/ExpressLRSBind/ui/lcd.lua", deps)
   end
   UI.init()
   -- One tick of delay so run()'s first drain creates the telemetry queue

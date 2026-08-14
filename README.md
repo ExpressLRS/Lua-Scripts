@@ -24,6 +24,7 @@ SCRIPTS/
     crsf_elrsinfo.lua         -- TX module info state (telemetry widget)
     msp.lua                   -- MSP-over-CRSF codec (bind tool)
     defer.lua                 -- deferred-callback timer (bind tool)
+    loader.lua                -- GC-guarded script loader (both tools)
     ui/
       lcd/
         text_edit.lua         -- BW text editor (bind tool)
