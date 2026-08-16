@@ -518,7 +518,6 @@ end
 -- ============================================================================
 
 local VTXDisplay, WidgetLayout = loadScript("/WIDGETS/ELRSVTXAdmin/ui/display.lua")(VTXAdmin, PresetsStorage)
-local FullScreenUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/fullscreen.lua")(VTXAdmin, PresetsStorage)
 
 -- ============================================================================
 -- Screen detection and UI loading
@@ -573,17 +572,32 @@ function wgt.refresh(_event, _touchState)
   wgt.background()
 end
 
--- The full-screen page is built once, on entry. Everything it shows updates in
--- place from there: every value is a per-frame callback or a control that polls
--- its get() -- see the ui/fullscreen.lua header for the constraint that keeps
--- that true.
+local FullScreenUI
+
+--- Build the full-screen page, loading it the first time it is asked for.
+--- Only one widget can be full screen at a time, so loading it eagerly would
+--- leave a page builder resident in every instance that never shows one --
+--- and this widget is the one users place many of. update() is not a hot
+--- path, so a loadScript here costs nothing.
+---
+--- The page is built once, on entry. Everything it shows updates in place from
+--- there: every value is a per-frame callback or a control that polls its
+--- get() -- see the ui/fullscreen.lua header for the constraint that keeps
+--- that true.
+local function buildFullScreen()
+  if not FullScreenUI then
+    FullScreenUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/fullscreen.lua")(VTXAdmin, PresetsStorage)
+  end
+  FullScreenUI.build()
+end
+
 function wgt.update(newOptions)
   wgt.options = newOptions
   if lvgl.isFullScreen() then
     if VTXAdmin.isReady() then
       VTXAdmin.syncDesiredFromState()
     end
-    FullScreenUI.build()
+    buildFullScreen()
   else
     WidgetUI.build(wgt.zone, wgt.options)
   end
