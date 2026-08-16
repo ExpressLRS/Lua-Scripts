@@ -334,7 +334,19 @@ end
 
 -- One health ramp, shared by the bars and the status LED, so a green bar and
 -- an amber dot can never describe the same link.
-local HEALTH = { GREEN, ORANGE, RED }
+--
+-- Theme colours rather than the GREEN/ORANGE/RED literals. Those are raw
+-- primaries -- GREEN is RGB(0,255,0) and RED is RGB(255,0,0)
+-- (colors.cpp:51-54) -- which is why a full-width LQ bar in GREEN was the
+-- loudest thing on the screen, and they stay that way whatever theme the
+-- pilot picked. The theme's own EDIT/ACTIVE/WARNING are the same three
+-- meanings in colours chosen to sit together, and they repaint with the theme.
+local HEALTH = { COLOR_THEME_EDIT, COLOR_THEME_ACTIVE, COLOR_THEME_WARNING }
+
+-- The same ramp for text. COLOR_THEME_ACTIVE is a bright yellow: fine as a
+-- bar fill, illegible as a word on the light themes' near-white panel, so
+-- warnings in text keep ORANGE.
+local HEALTH_TEXT = { COLOR_THEME_EDIT, ORANGE, COLOR_THEME_WARNING }
 
 -- Link margin in dB above the rated floor. At or below MARGIN_CRIT the
 -- receiver is at the edge of what it can hear; above MARGIN_WARN there is
@@ -343,9 +355,14 @@ local HEALTH = { GREEN, ORANGE, RED }
 local MARGIN_CRIT = 10
 local MARGIN_WARN = 30
 
---- Colour for a health level: 1 good, 2 warn, 3 critical.
+--- Fill colour for a health level: 1 good, 2 warn, 3 critical.
 function Display.healthColor(level)
   return HEALTH[level] or COLOR_THEME_DISABLED
+end
+
+--- The same, for text that has to stay readable on the panel.
+function Display.healthTextColor(level)
+  return HEALTH_TEXT[level] or COLOR_THEME_DISABLED
 end
 
 -- Uplink LQ. Below LQ_CRIT ExpressLRS is dropping enough packets to matter;
@@ -388,6 +405,11 @@ function Display.lqBarColor()
   return Display.healthColor(Display.lqLevel())
 end
 
+--- Colour for the LQ headline, which is a word and not a fill.
+function Display.lqTextColor()
+  return Display.healthTextColor(Display.lqLevel())
+end
+
 --- Fill colour for the headroom bar.
 function Display.headroomBarColor()
   return Display.healthColor(Display.marginLevel())
@@ -418,10 +440,10 @@ function Display.ledColor()
     return COLOR_THEME_DISABLED
   end
   if level == STATUS.NO_TELEMETRY then
-    return lit(BLINK_SLOW) and RED or COLOR_THEME_DISABLED
+    return lit(BLINK_SLOW) and COLOR_THEME_WARNING or COLOR_THEME_DISABLED
   end
   if level == STATUS.MISMATCH then
-    return lit(BLINK_FAST) and RED or COLOR_THEME_DISABLED
+    return lit(BLINK_FAST) and COLOR_THEME_WARNING or COLOR_THEME_DISABLED
   end
   return Display.lqBarColor()
 end
@@ -482,7 +504,7 @@ function Display.detailColor()
   if level == 1 then
     return COLOR_THEME_SECONDARY1
   end
-  return Display.healthColor(level)
+  return Display.healthTextColor(level)
 end
 
 --- Hero label font for one tier of a screen's WidgetUI.fonts table.

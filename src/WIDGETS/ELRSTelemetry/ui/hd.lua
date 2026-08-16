@@ -11,6 +11,16 @@ local Components = ctx.Components
 
 local WidgetUI = {}
 
+-- Font line heights, measured once. Fonts do not change under the widget, so
+-- there is nothing to invalidate; this only avoids re-measuring per build.
+local metrics
+local function measured()
+  if not metrics then
+    metrics = Components.measure()
+  end
+  return metrics
+end
+
 -- Breakpoints: absolute pixel values for 800x480.
 WidgetUI.breakpoints = {
   wideW = 560,
@@ -208,22 +218,12 @@ local function appendDataRows(rows)
   }
 end
 
---- 1/2: the four data rows without the title.
---- Sits between 1/3 and 1/1 so the battery row is never clipped off the bottom.
+--- 1/2: the panel without the group rows or the rules.
+--- Both bars survive, which is the whole point of the layout: this is the
+--- size the widget is usually placed at.
 function WidgetUI.buildHalf(w, h, opa)
-  local rows = {}
-  appendDataRows(rows)
-  WidgetLayout.column(w, h, opa, rows)
-end
-
--- Font line heights, measured once. Fonts do not change under the widget, so
--- there is nothing to invalidate; this only avoids re-measuring per build.
-local metrics
-local function measured()
-  if not metrics then
-    metrics = Components.measure()
-  end
-  return metrics
+  local m = measured()
+  Components.halfTier(w, h, opa, m, { lqFont = BOLD, lqH = m.bold })
 end
 
 --- 1/1: the uplink panel between a status strip and the group rows.

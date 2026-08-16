@@ -11,6 +11,16 @@ local Components = ctx.Components
 
 local WidgetUI = {}
 
+-- Font line heights, measured once. Fonts do not change under the widget, so
+-- there is nothing to invalidate; this only avoids re-measuring per build.
+local metrics
+local function measured()
+  if not metrics then
+    metrics = Components.measure()
+  end
+  return metrics
+end
+
 -- Breakpoints: absolute pixel values for 320x480 portrait.
 WidgetUI.breakpoints = {
   wideW = 240,
@@ -180,16 +190,6 @@ local function appendDataRows(rows)
     color = COLOR_THEME_SECONDARY1,
     text = Display.batteryText,
   }
-end
-
--- Font line heights, measured once. Fonts do not change under the widget, so
--- there is nothing to invalidate; this only avoids re-measuring per build.
-local metrics
-local function measured()
-  if not metrics then
-    metrics = Components.measure()
-  end
-  return metrics
 end
 
 --- 1/1: the uplink panel between a status strip and the group rows.

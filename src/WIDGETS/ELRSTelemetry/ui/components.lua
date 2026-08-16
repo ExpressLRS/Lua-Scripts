@@ -27,6 +27,10 @@ local Display = ...
 
 local Components = {}
 
+-- How solid a bar's unfilled track is. Enough to read the bar's full
+-- extent, not so much that the empty half draws the eye before the fill.
+local TRACK_OPACITY = 90
+
 -- ============================================================================
 -- Metrics
 -- ============================================================================
@@ -133,7 +137,13 @@ function Components.bar(dst, rect, y, spec)
     y = y,
     w = w,
     h = h,
+    -- A track has to be soft enough not to compete with the fill and solid
+    -- enough to show how far the fill has to go -- an invisible track makes
+    -- the bar a floating stub with no scale. COLOR_THEME_SECONDARY2 vanishes
+    -- into the panel and COLOR_THEME_DISABLED reads as a second bar, so it is
+    -- the disabled grey at part opacity.
     color = COLOR_THEME_DISABLED,
+    opacity = TRACK_OPACITY,
     filled = true,
   }
   dst[#dst + 1] = {
@@ -194,6 +204,7 @@ function Components.segments(dst, rect, y, spec)
     w = total,
     h = h,
     color = COLOR_THEME_DISABLED,
+    opacity = TRACK_OPACITY,
     filled = true,
   }
   dst[#dst + 1] = {
@@ -313,10 +324,22 @@ function Components.statusStrip(dst, rect, y, m, spec)
   -- The power meter fills the gap between the two only where there is one.
   -- Measured against the widest rate name the tables carry, so a switch from
   -- 25Hz to K1000Full never pushes the meter sideways.
+  local modeW = Components.textWidth("K1000Full", SMLSIZE)
+  local powerX = textX + modeW + m.pad * 3
   if spec.power then
-    local modeW = Components.textWidth("K1000Full", SMLSIZE)
-    local powerX = textX + modeW + m.pad * 3
     Components.powerGroup(dst, { x = powerX, w = antX - powerX - m.pad * 3 }, y, m)
+  elseif spec.powerText then
+    -- No room for the meter, so the reading itself takes the gap. The meter
+    -- is the first thing to go and the number is the last, because "50 mW"
+    -- still answers the question a lit cell count only illustrates.
+    Components.label(dst, {
+      x = powerX,
+      y = y,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = Display.powerText,
+      visible = Display.isNotMismatch,
+    })
   end
   return y + h
 end
@@ -370,7 +393,7 @@ function Components.uplinkPanel(dst, rect, y, m, spec)
     x = rect.x,
     y = y,
     font = spec.lqFont,
-    color = Display.lqBarColor,
+    color = Display.lqTextColor,
     text = Display.lqText,
   })
   y = y + spec.lqH
@@ -628,6 +651,59 @@ function Components.fullTier(w, h, opa, m, spec)
   if not wide then
     -- No room for the meter in a half-width strip, so it gets the last row.
     Components.powerGroup(panel, inner, y + m.gap, m)
+  end
+
+  lvgl.build(root)
+end
+
+--- The 1/2 tier: the same panel with the group rows and the rules taken out.
+--- Both bars survive here, and that is the point of the whole layout. This is
+--- the size the widget is most often placed at, and it is where an earlier
+--- draft -- uplink and downlink as mirrored blocks -- could not keep even one
+--- of them. The downlink row goes first because it is a whole group, and the
+--- bars are what the widget is for.
+--- TX power stays as the text in the strip; only the meter goes.
+function Components.halfTier(w, h, opa, m, spec)
+  local pad = m.pad
+  local inner = { x = pad, w = w - pad * 2 }
+  local battery = {
+    header = "BATTERY",
+    values = { { text = Display.cellText, sample = "4S 3.75 V" } },
+  }
+  local AIR_GAPS = 2
+  -- Thinner than this and a bar is a line, not a meter.
+  local MIN_BAR = 3
+  local fixed = pad * 2
+    + (m.sml + 4) -- status strip
+    + spec.lqH
+    + m.gap
+    + m.sml -- RSSI row
+
+  -- Battery is a whole group, so it goes before either bar is squeezed below
+  -- the height at which it stops reading as a bar. That is the degradation
+  -- order the whole layout follows: lose a row, keep the instruments.
+  local showBattery = Components.groupWidth(m, battery) <= inner.w and (h - fixed - m.sml) >= MIN_BAR * 2
+  if showBattery then
+    fixed = fixed + m.sml
+  end
+
+  local slack = h - fixed
+  local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.35), 20))
+  local air = math.max(0, math.floor((slack - barH * 2) / AIR_GAPS))
+
+  local root = {}
+  local panel = Components.panel(root, { x = 0, y = 0, w = w, h = h }, { opacity = opa })
+
+  local y = Components.statusStrip(panel, inner, pad, m, { powerText = true })
+  y = Components.uplinkPanel(panel, inner, y + air, m, {
+    lqFont = spec.lqFont,
+    lqH = spec.lqH,
+    barH = barH,
+    lqBar = true,
+    headroomBar = true,
+  })
+  if showBattery then
+    Components.groupRow(panel, inner, y + air, m, { battery })
   end
 
   lvgl.build(root)
