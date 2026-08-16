@@ -97,6 +97,7 @@ function WidgetUI.buildQuarter(w, h, opa)
       align = LEFT + VCENTER,
       flexFlow = lvgl.FLOW_ROW,
       flexPad = lvgl.PAD_TINY,
+      borderPad = 0,
       children = {
         {
           type = lvgl.LABEL,
@@ -121,6 +122,7 @@ function WidgetUI.buildQuarter(w, h, opa)
       align = LEFT,
       flexFlow = lvgl.FLOW_ROW,
       flexPad = lvgl.PAD_TINY,
+      borderPad = 0,
       children = {
         {
           type = lvgl.LABEL,
@@ -142,7 +144,7 @@ function WidgetUI.buildThird(w, h, opa)
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
-    font = WidgetUI.fonts.third.hero,
+    font = Display.heroFont(WidgetUI.fonts.third),
     color = Display.heroColor,
     text = Display.heroText,
   }
@@ -170,7 +172,7 @@ local function appendDataRows(rows)
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
-    font = WidgetUI.fonts.full.hero,
+    font = Display.heroFont(WidgetUI.fonts.full),
     color = Display.heroColor,
     text = Display.heroText,
   }

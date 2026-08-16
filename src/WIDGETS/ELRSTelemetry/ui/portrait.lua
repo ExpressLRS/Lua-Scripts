@@ -147,7 +147,7 @@ function WidgetUI.buildThird(w, h, opa)
   WidgetLayout.column(w, h, opa, rows)
 end
 
---- Data rows shared by the 1/2 and 1/1 tiers:
+--- Data rows for the 1/1 tier (portrait has no 1/2 tier):
 --- LQ, Range/RSSI, RF mode/power, battery.
 local function appendDataRows(rows)
   rows[#rows + 1] = {

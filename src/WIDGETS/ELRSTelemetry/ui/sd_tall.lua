@@ -97,6 +97,7 @@ function WidgetUI.buildQuarter(w, h, opa)
       align = LEFT + VCENTER,
       flexFlow = lvgl.FLOW_ROW,
       flexPad = lvgl.PAD_TINY,
+      borderPad = 0,
       children = {
         {
           type = lvgl.LABEL,
@@ -121,6 +122,7 @@ function WidgetUI.buildQuarter(w, h, opa)
       align = LEFT,
       flexFlow = lvgl.FLOW_ROW,
       flexPad = lvgl.PAD_TINY,
+      borderPad = 0,
       children = {
         {
           type = lvgl.LABEL,

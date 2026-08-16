@@ -27,7 +27,7 @@ WidgetUI.fonts = {
   quarter = { status = BOLD },
   third = { status = MIDSIZE, cheatsheet = STDSIZE },
   half = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
-  full = { hero = MIDSIZE, detail = 0, cheatsheet = STDSIZE },
+  full = { hero = MIDSIZE, detail = STDSIZE, cheatsheet = STDSIZE },
 }
 
 -- ============================================================================

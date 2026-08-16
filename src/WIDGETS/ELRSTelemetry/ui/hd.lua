@@ -23,7 +23,7 @@ WidgetUI.fonts = {
   sixth = { hero = BOLD },
   quarter = { hero = BOLD },
   third = { hero = MIDSIZE, heroStatus = BOLD, detail = SMLSIZE },
-  full = { hero = MIDSIZE, heroStatus = 0, detail = 0 },
+  full = { hero = MIDSIZE, heroStatus = STDSIZE, detail = 0 },
 }
 
 -- ============================================================================
