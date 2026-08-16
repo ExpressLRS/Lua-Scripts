@@ -4,8 +4,7 @@
 ---------------------------------------------------------------------------
 
 local ctx = ...
-local Telemetry = ctx.Telemetry
-local crsf = ctx.crsf
+local Display = ctx.Display
 local bgOpacity = ctx.bgOpacity
 local WidgetLayout = ctx.WidgetLayout
 
@@ -29,32 +28,10 @@ WidgetUI.fonts = {
 }
 
 -- ============================================================================
--- Minimized display helpers
--- ============================================================================
-
-local function detailColor()
-  if not crsf.hasTelemetry then
-    return COLOR_THEME_SECONDARY1
-  end
-  return Telemetry.rangeColor(Telemetry.rangePct)
-end
-
-local function heroTextLq()
-  local status = Telemetry.statusText()
-  if status then
-    return status
-  end
-  return table.concat({ "LQ ", tostring(Telemetry.link.rqly or 0), "%" })
-end
-
--- ============================================================================
 -- Minimized layout builders (by widget height tier)
 -- ============================================================================
 
-local TopBarUI = loadScript("/WIDGETS/ELRSTelemetry/ui/topbar.lua")({
-  crsf = crsf,
-  Telemetry = Telemetry,
-})
+local TopBarUI = loadScript("/WIDGETS/ELRSTelemetry/ui/topbar.lua")({ Display = Display })
 
 --- 1/6: single compact line — LQ (bold) + Range/dBm (colored) + RF mode (neutral).
 --- Fixed-width columns prevent layout jumping when digit counts change.
@@ -72,8 +49,8 @@ function WidgetUI.buildSixth(w, h, opa)
           type = lvgl.LABEL,
           y = lvgl.PAD_SMALL,
           font = WidgetUI.fonts.sixth.hero,
-          color = Telemetry.heroColor,
-          text = heroTextLq,
+          color = Display.heroColor,
+          text = Display.heroText,
         },
       },
     },
@@ -86,8 +63,8 @@ function WidgetUI.buildSixth(w, h, opa)
           type = lvgl.LABEL,
           y = lvgl.PAD_SMALL,
           font = SMLSIZE,
-          color = detailColor,
-          text = Telemetry.signalText,
+          color = Display.detailColor,
+          text = Display.signalText,
         },
       },
     },
@@ -101,7 +78,7 @@ function WidgetUI.buildSixth(w, h, opa)
           y = lvgl.PAD_SMALL,
           font = SMLSIZE,
           color = COLOR_THEME_SECONDARY1,
-          text = Telemetry.rfModeText,
+          text = Display.rfModeText,
         },
       },
     },
@@ -126,15 +103,15 @@ function WidgetUI.buildQuarter(w, h, opa)
           w = c1w,
           align = LEFT,
           font = WidgetUI.fonts.quarter.hero,
-          color = Telemetry.heroColor,
-          text = heroTextLq,
+          color = Display.heroColor,
+          text = Display.heroText,
         },
         {
           type = lvgl.LABEL,
           align = LEFT,
           font = SMLSIZE,
-          color = detailColor,
-          text = Telemetry.signalText,
+          color = Display.detailColor,
+          text = Display.signalText,
         },
       },
     },
@@ -150,7 +127,7 @@ function WidgetUI.buildQuarter(w, h, opa)
           align = LEFT,
           font = SMLSIZE,
           color = COLOR_THEME_SECONDARY1,
-          text = Telemetry.rfDetailText,
+          text = Display.rfDetailText,
         },
       },
     },
@@ -166,22 +143,22 @@ function WidgetUI.buildThird(w, h, opa)
     type = lvgl.LABEL,
     align = LEFT,
     font = WidgetUI.fonts.third.hero,
-    color = Telemetry.heroColor,
-    text = heroTextLq,
+    color = Display.heroColor,
+    text = Display.heroText,
   }
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
     font = WidgetUI.fonts.third.detail,
-    color = detailColor,
-    text = Telemetry.signalText,
+    color = Display.detailColor,
+    text = Display.signalText,
   }
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
     font = SMLSIZE,
     color = COLOR_THEME_SECONDARY1,
-    text = Telemetry.rfDetailText,
+    text = Display.rfDetailText,
   }
 
   WidgetLayout.column(w, h, opa, rows)
@@ -194,29 +171,29 @@ local function appendDataRows(rows)
     type = lvgl.LABEL,
     align = LEFT,
     font = WidgetUI.fonts.full.hero,
-    color = Telemetry.heroColor,
-    text = heroTextLq,
+    color = Display.heroColor,
+    text = Display.heroText,
   }
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
     font = WidgetUI.fonts.full.detail,
-    color = detailColor,
-    text = Telemetry.signalText,
+    color = Display.detailColor,
+    text = Display.signalText,
   }
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
     font = SMLSIZE,
     color = COLOR_THEME_SECONDARY1,
-    text = Telemetry.rfDetailText,
+    text = Display.rfDetailText,
   }
   rows[#rows + 1] = {
     type = lvgl.LABEL,
     align = LEFT,
     font = SMLSIZE,
     color = COLOR_THEME_SECONDARY1,
-    text = Telemetry.batteryText,
+    text = Display.batteryText,
   }
 end
 

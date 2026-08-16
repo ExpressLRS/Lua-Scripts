@@ -1,6 +1,6 @@
 ---------------------------------------------------------------------------
 -- ELRS RF Mode Tables                                                   --
--- Loaded via loadScript() from ELRSTelemetry/elrsinfo.lua with no       --
+-- Loaded via loadScript() from ELRSTelemetry/telemetry.lua with no      --
 -- arguments; returns the RfModes table.                                 --
 --                                                                       --
 -- Pure data plus its selector: the packet-rate names ExpressLRS reports  --

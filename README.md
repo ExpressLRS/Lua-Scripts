@@ -49,11 +49,14 @@ SCRIPTS/
         lcd.lua               -- black & white LCD UI
 WIDGETS/
   ELRSTelemetry/
-    main.lua
-    elrsinfo.lua              -- TX module info state
-    loadable.lua
+    main.lua                  -- entry point
+    telemetry.lua             -- link state: drain, device info, model match, sensor snapshot
+    rf_modes.lua              -- RF mode names and RSSI floors, by firmware version
+    loadable.lua              -- per-instance wiring and lifecycle
     ui/
-      ...
+      display.lua             -- read model shared by every layout below
+      topbar.lua              -- top-bar layout
+      sd.lua sd_tall.lua hd.lua portrait.lua small.lua
   ELRSVTXAdmin/
     main.lua
     loadable.lua

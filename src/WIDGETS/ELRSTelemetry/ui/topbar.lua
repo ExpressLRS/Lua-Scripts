@@ -1,17 +1,23 @@
 ---------------------------------------------------------------------------
 -- ELRS Telemetry Widget - Shared Top Bar UI                             --
--- Used by all screen-specific UI files for the top bar layout.          --
+-- Loaded via loadScript() from each per-screen ui/ file with            --
+-- ({ Display }); returns the TopBarUI table.                            --
+--                                                                       --
+-- Two stacked lines and no background, so it composes onto the dark     --
+-- header. Everything it shows is abbreviated to fit a top-bar slot,     --
+-- which is why it spells out its own text ladder rather than reusing    --
+-- the hero label's.                                                     --
 ---------------------------------------------------------------------------
 
 local ctx = ...
-local crsf = ctx.crsf
-local Telemetry = ctx.Telemetry
+local Display = ctx.Display
 
 local TopBarUI = {}
 
---- Top bar sits on the dark header, so it needs PRIMARY2 rather than Telemetry.heroColor's PRIMARY1.
+--- The top bar sits on the dark header, so it needs PRIMARY2 where
+--- Display.heroColor uses PRIMARY1.
 local function mismatchColor()
-  if Telemetry.isMismatch() then
+  if Display.isMismatch() then
     return RED
   end
   return COLOR_THEME_PRIMARY2
@@ -36,13 +42,13 @@ function TopBarUI.build(w, h)
           font = SMLSIZE,
           color = mismatchColor,
           text = function()
-            if not crsf.hasTelemetry then
+            if not Display.isConnected() then
               return "--"
             end
-            if Telemetry.isMismatch() then
+            if Display.isMismatch() then
               return "Model"
             end
-            return table.concat({ "LQ ", tostring(Telemetry.link.rqly or 0), "%" })
+            return Display.lqText()
           end,
         },
         {
@@ -51,17 +57,13 @@ function TopBarUI.build(w, h)
           font = SMLSIZE,
           color = mismatchColor,
           text = function()
-            if not crsf.hasTelemetry then
+            if not Display.isConnected() then
               return "--"
             end
-            if Telemetry.isMismatch() then
+            if Display.isMismatch() then
               return "Mismatch"
             end
-            local rssi = Telemetry.getRssi(Telemetry.link)
-            if rssi == nil then
-              return ""
-            end
-            return table.concat({ tostring(rssi), "dBm" })
+            return Display.rssiText()
           end,
         },
       },

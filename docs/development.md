@@ -76,7 +76,7 @@ The tools build on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 Frames are consumed pull-style. `crossfireTelemetryPop()` is destructive per script instance, and
 the firmware delivers every widget instance its own copy of each incoming frame, so **each script
 instance has exactly one draining consumer**: the config tool and the VTX Admin widget drain through
-`session:drain()`, the telemetry widget through `elrsinfo:drain()`, and the bind tool through
+`session:drain()`, the telemetry widget through `Telemetry.drain()`, and the bind tool through
 `crsf.drain(App, App.onFrame)`. A future widget needing two consumers must pop once and route the
 frames itself. `reassemble()` callers pass the field id they
 are waiting for (strict), or `data[3]` to accept any field from their device (`acceptUnsolicited`,
