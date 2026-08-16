@@ -1636,6 +1636,7 @@ local scenarioTelemetry = {
     Sats = 12,
     GSpd = 25.3,
     Alt = 142,
+    GPS = { lat = 54.6872, lon = 25.2797 },
   },
   -- A receiver with one RF path: it never writes uplink_RSSI_2, so 2RSS arrives
   -- as 0 dBm and the widget should report no diversity.
@@ -1652,6 +1653,7 @@ local scenarioTelemetry = {
     Sats = 11,
     GSpd = 22.4,
     Alt = 120,
+    GPS = { lat = 54.6901, lon = 25.2712 },
   },
   armed = {
     TPWR = 250,
@@ -1666,6 +1668,7 @@ local scenarioTelemetry = {
     Sats = 14,
     GSpd = 42.7,
     Alt = 85,
+    GPS = { lat = 54.7050, lon = 25.3100 },
   },
   -- Bench-realistic signal: a mismatch is caught next to the quad, and the
   -- active-antenna RSSI must clear the model-match poll's -70 dBm gate.
@@ -1719,6 +1722,7 @@ local scenarioTelemetry = {
     Sats = 9,
     GSpd = 31.0,
     Alt = 210,
+    GPS = { lat = 54.6600, lon = 25.2400 },
   },
   reconnect = {
     -- Same as normal; only served when isRxAvailable() is true
@@ -1745,6 +1749,7 @@ local scenarioTelemetry = {
     Sats = 12,
     GSpd = 25.3,
     Alt = 142,
+    GPS = { lat = 54.6872, lon = 25.2797 },
   },
   critical_error = {
     -- Same link as normal; only the ELRS status flags differ.
@@ -1760,11 +1765,12 @@ local scenarioTelemetry = {
     Sats = 12,
     GSpd = 25.3,
     Alt = 142,
+    GPS = { lat = 54.6872, lon = 25.2797 },
   },
 }
 
 -- Jitter ranges for sensors that fluctuate in real life.
--- Sensors not listed (TPWR, RFMD, ANT, FM, Sats) stay static.
+-- Sensors not listed (TPWR, RFMD, ANT, FM, Sats, GPS) stay static.
 local sensorJitter = {
   ["1RSS"] = 3, -- +/- 3 dBm
   ["2RSS"] = 3,
