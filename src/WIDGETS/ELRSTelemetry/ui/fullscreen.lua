@@ -197,12 +197,32 @@ function FullScreenUI.build()
     end)
   )
 
+  -- Sensitivity and Link Margin sit directly under the RSSI rows and share
+  -- their unit, so the arithmetic between the three is visible: this is what
+  -- the receiver is rated to hear, and this is how far above it you are.
   createDisplayRow(
     fields,
-    "Range",
+    "Sensitivity",
     whenConnected(function()
-      return table.concat({ tostring(Telemetry.rangePct), "%" })
+      local sens = Telemetry.link.sens
+      if sens == nil then
+        return "--"
+      end
+      return table.concat({ tostring(sens), " dBm @ ", Display.rfModeText() })
     end)
+  )
+
+  createDisplayRow(
+    fields,
+    "Link Margin",
+    whenConnected(function()
+      local db = Telemetry.marginDb()
+      if db == nil then
+        return "--"
+      end
+      return string.format("%+d dB", db)
+    end),
+    Display.detailColor
   )
 
   -- Power section

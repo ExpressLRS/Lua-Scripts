@@ -91,19 +91,21 @@ function Display.isMismatch()
   return Telemetry.isMismatch()
 end
 
+-- One word per rung of Telemetry.STATUS. Title case throughout, because
+-- pageSubtitle() puts these under the full-screen page's own title, where
+-- shouting would read wrong. The tiers that want a caps banner spell it out
+-- themselves as a fixed label.
+local STATUS_TEXT = {
+  [Telemetry.STATUS.NO_MODULE] = "No CRSF module",
+  [Telemetry.STATUS.NO_TELEMETRY] = "No telemetry",
+  [Telemetry.STATUS.MISMATCH] = "Model Mismatch",
+}
+
 --- Short status text when not operational or a warning is active.
---- Returns nil when connected with no warnings.
+--- Returns nil when connected with no warnings, which is the OK rung having
+--- no entry above rather than a case handled here.
 function Display.statusText()
-  if not Telemetry.hasModule() then
-    return "No CRSF module"
-  end
-  if not Telemetry.isConnected() then
-    return "No telemetry"
-  end
-  if Telemetry.modelMismatch then
-    return "Model Mismatch"
-  end
-  return nil
+  return STATUS_TEXT[Telemetry.statusLevel()]
 end
 
 --- Full-screen page subtitle: the same ladder, with a resting state.
@@ -144,17 +146,23 @@ function Display.heroText()
   return Display.statusText() or Display.lqText()
 end
 
---- Range percentage + RSSI text, e.g. "Range 69% -90dBm".
+--- Active RSSI against the rate's rated floor, e.g. "-90 / -112 dBm".
+--- The pair is the point: RSSI alone says nothing until you know what the
+--- receiver can still hear at, and that figure moves with the packet rate.
+--- Drops to the reading alone when the rate is unrated.
 function Display.signalText()
   if not Telemetry.isConnected() then
     return ""
   end
-  local parts = { table.concat({ "Range ", tostring(Telemetry.rangePct), "%" }) }
-  local rssi = Display.rssiText()
-  if rssi ~= "" then
-    parts[#parts + 1] = rssi
+  local rssi = Telemetry.activeRssi()
+  if rssi == nil then
+    return ""
   end
-  return table.concat(parts, " ")
+  local sens = Telemetry.link.sens
+  if sens == nil then
+    return table.concat({ tostring(rssi), " dBm" })
+  end
+  return table.concat({ tostring(rssi), " / ", tostring(sens), " dBm" })
 end
 
 --- RF mode text, e.g. "250Hz". Narrow zones use this without the power suffix.
@@ -213,24 +221,32 @@ function Display.heroColor()
   return COLOR_THEME_PRIMARY1
 end
 
---- Map range percentage to a warning colour.
-local function rangeColor(pct)
-  if pct > 90 then
+-- Link margin in dB above the rated floor. At or below MARGIN_CRIT the
+-- receiver is at the edge of what it can hear; above MARGIN_WARN there is
+-- room left to fly into. Same thresholds the range percentage used, the right
+-- way up and in the unit the number is actually measured in.
+local MARGIN_CRIT = 10
+local MARGIN_WARN = 30
+
+--- Map link margin to a warning colour.
+local function marginColor(db)
+  if db <= MARGIN_CRIT then
     return RED
   end
-  if pct > 70 then
+  if db <= MARGIN_WARN then
     return ORANGE
   end
   return COLOR_THEME_SECONDARY1
 end
 
---- Detail line colour: warns as the range percentage climbs, neutral while
---- there is no link to judge.
+--- Detail line colour: warns as the link margin shrinks, neutral while there
+--- is no margin to judge -- no link, or a rate with no published floor.
 function Display.detailColor()
-  if not Telemetry.isConnected() then
+  local db = Telemetry.marginDb()
+  if db == nil then
     return COLOR_THEME_SECONDARY1
   end
-  return rangeColor(Telemetry.rangePct)
+  return marginColor(db)
 end
 
 --- Hero label font for one tier of a screen's WidgetUI.fonts table.
