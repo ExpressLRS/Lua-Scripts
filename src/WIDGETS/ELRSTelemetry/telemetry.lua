@@ -248,6 +248,7 @@ function Telemetry.resetModel()
   Telemetry.gps = nil
   Telemetry._wasConnected = false
   Telemetry._sampledAt = nil
+  crsf.resetSensorCache()
 end
 
 -- ============================================================================

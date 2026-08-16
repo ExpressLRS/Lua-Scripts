@@ -69,7 +69,7 @@ The tools build on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 | `SCRIPTS/ELRS/ui/lvgl/dialogs.lua` | The color-LCD startup dialogs a tool can raise before it has a page -- the version gate and the missing-module notice. Both are terminal, so each takes the caller's `onExit` for the close box and the Exit button. Loaded by both tools' LVGL UIs |
 | `SCRIPTS/ELRS/loader.lua` | The tools' GC-guarded script loader: a full collection before each `loadScript` keeps fresh-install compile peaks from stacking. The one part consumers bootstrap with a bare `loadScript` |
 | `SCRIPTS/ELRS/edgetx_version.lua` | The one home of the minimum EdgeTX requirement (2.11.6 / 2.12.1 / 3.0). Each tool's `main.lua` checks it once and hands `deps.versionOk` to its UI chunk, whose `preCheck` owns the presentation. Keep `min_edgetx_version` in `edgetx.yml` in step |
-| `SCRIPTS/ELRS/sensors.lua` | Generic EdgeTX telemetry reader (`getSensorValue` with a cached name-to-ID lookup), not CRSF-specific. Loaded by `crsf.lua`, which exposes it to every consumer as `crsf.getSensorValue` |
+| `SCRIPTS/ELRS/sensors.lua` | Generic EdgeTX telemetry reader (`getSensorValue` with a cached name-to-ID lookup), not CRSF-specific. Loaded by `crsf.lua`, which exposes it to every consumer as `crsf.getSensorValue`. A cached ID addresses a slot in the model that was loaded when it was resolved, so a consumer that survives a model change must call `crsf.resetSensorCache()` on that edge |
 | `SCRIPTS/ELRS/file_storage.lua` | Generic key=value file persistence (`read`/`write`), schema-free. Loaded by the VTX Admin widget and the bind tool |
 | `SCRIPTS/ELRS/shim.lua` | `table.concat` polyfill for BW radios |
 

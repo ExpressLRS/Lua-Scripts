@@ -139,6 +139,11 @@ end
 -- Read a telemetry sensor value by name (/SCRIPTS/ELRS/sensors.lua)
 CRSF.getSensorValue = sensors.getSensorValue
 
+-- Drop the cached sensor IDs, which belong to the model that was loaded when
+-- they were resolved. Whoever observes the model-change edge calls this; the
+-- simulator mock reads by name and has no cache, so it needs no counterpart.
+CRSF.resetSensorCache = sensors.resetCache
+
 function CRSF.hasCrsfModule()
   for modIdx = 0, 1 do
     local mod = model.getModule(modIdx)
