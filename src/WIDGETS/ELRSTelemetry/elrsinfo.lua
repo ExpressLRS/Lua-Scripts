@@ -1,11 +1,13 @@
 ---------------------------------------------------------------------------
 -- ELRS TX Module Info                                                   --
+-- Loaded via loadScript() from ELRSTelemetry/main.lua with (crsf);      --
+-- returns the ElrsInfo singleton.                                       --
 --                                                                       --
--- Opt-in stateful companion to the CRSF singleton: DEVICE_INFO cache    --
--- (module name, version-keyed RFMOD/RFRSSI lookup tables) and the       --
--- model-match status, fed by drain(). Loaded once per                   --
--- Lua state and shared by every widget instance; widgets that do not    --
--- need this data never load it, so they never pay for the tables.       --
+-- Stateful companion to the CRSF singleton: DEVICE_INFO cache (module   --
+-- name, version-keyed RFMOD/RFRSSI lookup tables) and the model-match   --
+-- status, fed by drain(). Loaded once per Lua state and shared by every --
+-- instance of this widget, so the poll rate limits below are one set of --
+-- counters however many instances the user has placed.                  --
 --                                                                       --
 -- Per background tick: elrsinfo:drain() to ingest the queue (which also --
 -- refreshes crsf.hasTelemetry as it empties), then elrsinfo:update() to --

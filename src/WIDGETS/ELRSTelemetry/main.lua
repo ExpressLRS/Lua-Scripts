@@ -17,7 +17,7 @@ local function create(zone, options)
     _crsfSingleton = getCRSF()
   end
   if not _elrsInfoSingleton then
-    local getElrsInfo = loadScript("/SCRIPTS/ELRS/crsf_elrsinfo.lua")
+    local getElrsInfo = loadScript(table.concat({ "/WIDGETS/", name, "/elrsinfo.lua" }))
     ---@diagnostic disable-next-line: need-check-nil
     _elrsInfoSingleton = getElrsInfo(_crsfSingleton)
   end
@@ -27,7 +27,7 @@ local function create(zone, options)
   -- shutdown rebuild, so the verdict the previous model's link gave would
   -- carry into this one. Drop it here and ask again.
   _elrsInfoSingleton:resetModelMatch()
-  local loadable = loadScript("/WIDGETS/" .. name .. "/loadable.lua")
+  local loadable = loadScript(table.concat({ "/WIDGETS/", name, "/loadable.lua" }))
   ---@diagnostic disable-next-line: need-check-nil
   return loadable(zone, options, _crsfSingleton, _elrsInfoSingleton)
 end

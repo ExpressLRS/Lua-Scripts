@@ -21,7 +21,6 @@ SCRIPTS/
     crsf.lua                  -- shared CRSF protocol library
     crsf_params.lua           -- parameter codec (tool, VTX Admin)
     crsf_session.lua          -- stateful parameter client (tool, VTX Admin)
-    crsf_elrsinfo.lua         -- TX module info state (telemetry widget)
     msp.lua                   -- MSP-over-CRSF codec (bind tool)
     defer.lua                 -- deferred-callback timer (bind tool)
     loader.lua                -- GC-guarded script loader (both tools)
@@ -51,6 +50,7 @@ SCRIPTS/
 WIDGETS/
   ELRSTelemetry/
     main.lua
+    elrsinfo.lua              -- TX module info state
     loadable.lua
     ui/
       ...
