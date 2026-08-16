@@ -55,6 +55,34 @@ bounded UID retry reports that instead of polling forever):
 Both tools pick their UI chunk at runtime -- `local useLvgl = (lvgl ~= nil)` -- and load exactly one
 of `ui/lvgl.lua` or `ui/lcd.lua`; there are no per-radio builds.
 
+The telemetry widget, `WIDGETS/ELRSTelemetry/`:
+
+| Module | Purpose |
+|--------|---------|
+| `main.lua` | Entry point and the EdgeTX widget descriptor. Bootstraps the singletons into globals and resets the model-scoped state when the model changes |
+| `telemetry.lua` | Everything the widget knows about the link, in one owner: the frame drain, the DEVICE_INFO cache, the model-match status and the rules for when it may be asked for, the per-tick sensor snapshot, and every value derived from it. The only file in the widget that sees `crsf` |
+| `rf_modes.lua` | Packet-rate names and rated RSSI floors, keyed by the module's firmware major version. Pure data plus its selector, apart from the policy because it versions on ExpressLRS's release clock |
+| `loadable.lua` | One per placed widget: picks the layout for the screen, wires the components, drives them from the widget callbacks. Owns no state |
+| `ui/display.lua` | The read model: zero-argument formatters the layouts pass to LVGL as `text`/`color` callbacks, plus `WidgetLayout`. The whole vocabulary the view has |
+| `ui/fullscreen.lua` | The full-screen page, one layout for every screen size. Loaded on first entry |
+| `ui/<screen>.lua` | Minimized layout per screen size, each with its own breakpoints, fonts and height tiers |
+| `ui/topbar.lua` | Top-bar layout, shared by every screen file |
+
+`WIDGETS/ELRSVTXAdmin/` has the same shape, with `loadable.lua` holding the domain (it is per
+instance, being a config client rather than shared link state) and `presets_storage.lua` alongside it.
+
+Two rules hold across both widgets. The per-screen `ui/<screen>.lua` files are deliberately
+self-contained -- own breakpoints, own fonts, own tier builders -- so changing one screen cannot break
+another; shared *presentation* goes in `ui/display.lua` instead. And no `ui/` file receives the CRSF
+transport: the view asks the read model, which asks the domain.
+
+The telemetry widget's state is shared by every instance of it, because it describes the radio's link
+rather than a widget. That costs three things, all stated in `telemetry.lua`'s header: `drain()` runs
+per instance and ungated (each instance owns a firmware pop queue only it can empty), `update()`
+samples at most once per tick (or the range smoother steps once per instance per frame), and the frame
+handlers stay pure assignment (every instance is delivered its own copy of each frame, so the
+singleton decodes each one N times on a radio and once in the simulator).
+
 The tools build on the shared `SCRIPTS/ELRS/` library, which the widgets use too:
 
 | Module | Purpose |

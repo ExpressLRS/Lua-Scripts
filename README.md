@@ -55,14 +55,19 @@ WIDGETS/
     loadable.lua              -- per-instance wiring and lifecycle
     ui/
       display.lua             -- read model shared by every layout below
+      fullscreen.lua          -- full-screen page
       topbar.lua              -- top-bar layout
       sd.lua sd_tall.lua hd.lua portrait.lua small.lua
   ELRSVTXAdmin/
-    main.lua
-    loadable.lua
+    main.lua                  -- entry point
+    loadable.lua              -- VTX config client and wiring
+    presets_storage.lua       -- preset slot persistence
     presets.txt
     ui/
-      ...
+      display.lua             -- read model shared by every layout below
+      fullscreen.lua          -- full-screen editor
+      topbar.lua              -- top-bar layout
+      sd.lua sd_tall.lua hd.lua portrait.lua small.lua
 ```
 
 The shared library `SCRIPTS/ELRS/` is required by both tools and both widgets.
