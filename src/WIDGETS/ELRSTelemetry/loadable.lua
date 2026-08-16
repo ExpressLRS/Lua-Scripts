@@ -112,12 +112,11 @@ end
 
 --- Compute smoothed range percentage from RSSI.
 function Telemetry.getRangePct(tlm)
-  local mod = elrsinfo.deviceInfo
   local rssi = (tlm.ant == 1) and tlm.rssi2 or tlm.rssi1
   if rssi == nil then
     return 0
   end
-  local minrssi = (mod.RFRSSI and tlm.rfmd and mod.RFRSSI[tlm.rfmd + 1]) or -128
+  local minrssi = (tlm.rfmd and elrsinfo.rfModes.floor(tlm.rfmd)) or -128
   if rssi > -50 then
     rssi = -50
   end
@@ -137,8 +136,7 @@ function Telemetry.getRfModeStr(rfmd)
   if not crsf.hasTelemetry or rfmd == nil then
     return ""
   end
-  local mod = elrsinfo.deviceInfo
-  return (mod.RFMOD and mod.RFMOD[rfmd + 1]) or table.concat({ "RFMD", tostring(rfmd) })
+  return elrsinfo.rfModes.name(rfmd)
 end
 
 --- Update GPS cache from telemetry.

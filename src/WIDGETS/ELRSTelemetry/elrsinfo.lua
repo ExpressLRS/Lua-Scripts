@@ -3,11 +3,11 @@
 -- Loaded via loadScript() from ELRSTelemetry/main.lua with (crsf);      --
 -- returns the ElrsInfo singleton.                                       --
 --                                                                       --
--- Stateful companion to the CRSF singleton: DEVICE_INFO cache (module   --
--- name, version-keyed RFMOD/RFRSSI lookup tables) and the model-match   --
--- status, fed by drain(). Loaded once per Lua state and shared by every --
--- instance of this widget, so the poll rate limits below are one set of --
--- counters however many instances the user has placed.                  --
+-- Stateful companion to the CRSF singleton: DEVICE_INFO cache, the RF   --
+-- mode tables it selects, and the model-match status, all fed by        --
+-- drain(). Loaded once per Lua state and shared by every instance of    --
+-- this widget, so the poll rate limits below are one set of counters    --
+-- however many instances the user has placed.                           --
 --                                                                       --
 -- Per background tick: elrsinfo:drain() to ingest the queue (which also --
 -- refreshes crsf.hasTelemetry as it empties), then elrsinfo:update() to --
@@ -16,14 +16,19 @@
 
 local crsf = ...
 
+local RfModes = loadScript("/WIDGETS/ELRSTelemetry/rf_modes.lua")()
+
 local ElrsInfo = {}
+
+-- The RF mode lookup, re-exported so consumers reach the tables through the
+-- module that answered the device ping rather than loading them themselves.
+ElrsInfo.rfModes = RfModes
 
 -- ============================================================================
 -- State
 -- ============================================================================
 
--- Device info cache (populated by the DEVICE_INFO handler):
--- name, isElrs, RFMOD, RFRSSI
+-- Device info cache (populated by the DEVICE_INFO handler): name, isElrs
 ElrsInfo.deviceInfo = {}
 
 -- Model match comes from the ELRS_STATUS answers updateModelMatch() asks for.
@@ -46,11 +51,6 @@ ElrsInfo._statusAnswered = nil
 
 -- hasTelemetry as last seen by update(), to detect connection edges.
 ElrsInfo._wasConnected = false
-
--- Effective major version of the RFMOD/RFRSSI tables currently built. The
--- only version datum kept, purely so selectRfTables() can skip rebuilds.
----@type number?
-ElrsInfo._rfMaj = nil
 
 -- ============================================================================
 -- Helpers
@@ -163,144 +163,6 @@ end
 -- Frame handlers
 -- ============================================================================
 
---- Install the RFMOD/RFRSSI lookup tables for an ELRS major version.
--- The highest known version at or below vMaj wins, so newer firmware
--- degrades to the newest known tables instead of losing its rate names.
--- Rebuilt only when the effective version changes (first answer, module
--- swap across reconnects), never per frame.
-local function selectRfTables(vMaj)
-  local effMaj
-  if vMaj >= 4 then
-    effMaj = 4
-  elseif vMaj == 3 then
-    effMaj = 3
-  end
-  if ElrsInfo._rfMaj == effMaj then
-    return
-  end
-  ElrsInfo._rfMaj = effMaj
-
-  local info = ElrsInfo.deviceInfo
-  if effMaj == 4 then
-    -- selene: allow(mixed_table)
-    info.RFMOD = {
-      "25Hz",
-      "50Hz",
-      "100Hz",
-      "100HzFull",
-      "150Hz",
-      "200Hz",
-      "200HzFull",
-      "250Hz",
-      "333HzFull",
-      "500Hz",
-      "D50",
-      "K1000Full",
-      [21] = "25Hz",
-      [22] = "50Hz",
-      [23] = "100Hz",
-      [24] = "100HzFull",
-      [25] = "150Hz",
-      [26] = "200Hz",
-      [27] = "200HzFull",
-      [28] = "250Hz",
-      [29] = "333HzFull",
-      [30] = "500Hz",
-      [31] = "D250",
-      [32] = "D500",
-      [33] = "F500",
-      [34] = "F1000",
-      [35] = "DK250",
-      [36] = "DK500",
-      [37] = "K1000",
-      [101] = "X100Full",
-      [102] = "X150",
-    }
-    -- selene: allow(mixed_table)
-    info.RFRSSI = {
-      -123,
-      -120,
-      -117,
-      -112,
-      0,
-      -112,
-      -111,
-      -111,
-      0,
-      0,
-      -112,
-      -101,
-      [21] = 0,
-      [22] = -115,
-      [23] = 0,
-      [24] = -112,
-      [25] = -112,
-      [26] = 0,
-      [27] = 0,
-      [28] = -108,
-      [29] = -105,
-      [30] = -105,
-      [31] = -104,
-      [32] = -104,
-      [33] = -104,
-      [34] = -104,
-      [35] = -103,
-      [36] = -103,
-      [37] = -103,
-      [101] = -112,
-      [102] = -112,
-    }
-  elseif effMaj == 3 then
-    info.RFMOD = {
-      "",
-      "25Hz",
-      "50Hz",
-      "100Hz",
-      "100HzFull",
-      "150Hz",
-      "200Hz",
-      "250Hz",
-      "333HzFull",
-      "500Hz",
-      "D250",
-      "D500",
-      "F500",
-      "F1000",
-      "D50",
-      "200HzFull",
-      "DK500",
-      "K1000",
-      "9K1000",
-      "K1000Full",
-    }
-    info.RFRSSI = {
-      0,
-      -123,
-      -115,
-      -117,
-      -112,
-      -112,
-      -112,
-      -108,
-      -105,
-      -105,
-      -104,
-      -104,
-      -104,
-      -104,
-      -112,
-      -111,
-      -103,
-      -103,
-      0,
-      -101,
-    }
-  else
-    info.RFMOD = nil
-    info.RFRSSI = nil
-  end
-end
-
 -- DEVICE_INFO handler: caches module name/identity and selects the RF tables
 local function onDeviceInfo(data)
   local info = crsf:decodeDeviceInfo(data)
@@ -309,7 +171,7 @@ local function onDeviceInfo(data)
   end
   ElrsInfo.deviceInfo.name = info.name
   ElrsInfo.deviceInfo.isElrs = info.isElrs
-  selectRfTables(info.vMaj)
+  RfModes.select(info.vMaj)
 end
 
 -- ELRS_STATUS handler: latches the answer and updates modelMismatch
