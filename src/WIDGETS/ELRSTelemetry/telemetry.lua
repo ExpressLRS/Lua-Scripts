@@ -139,20 +139,6 @@ function Telemetry.hasDiversity()
   return rssi2 ~= nil and rssi2 ~= 0
 end
 
--- Power levels a module steps through, for the index the full-screen page
--- shows next to the milliwatts.
-Telemetry.POWERS = { 10, 25, 50, 100, 250, 500, 1000, 2000 }
-
---- Map a power value in mW to a 0-based index.
-function Telemetry.powerIndex(mw)
-  for k, v in ipairs(Telemetry.POWERS) do
-    if mw == v then
-      return k - 1
-    end
-  end
-  return 7
-end
-
 --- Packet-rate name for the current RF mode, e.g. "250Hz".
 function Telemetry.rfModeName()
   local rfmd = Telemetry.link.rfmd

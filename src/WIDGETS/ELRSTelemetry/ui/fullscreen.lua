@@ -220,18 +220,6 @@ function FullScreenUI.build()
     end)
   )
 
-  createDisplayRow(
-    fields,
-    "Power Index",
-    whenConnected(function()
-      local tpwr = Telemetry.link.tpwr
-      if tpwr == nil then
-        return "--"
-      end
-      return tostring(Telemetry.powerIndex(tpwr))
-    end)
-  )
-
   -- Flight Controller section
   createSectionHeader(fields, "Flight Controller")
 
