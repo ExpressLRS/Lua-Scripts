@@ -19,6 +19,7 @@ local zone, options, Telemetry = ...
 -- ============================================================================
 
 local Display, WidgetLayout = loadScript("/WIDGETS/ELRSTelemetry/ui/display.lua")(Telemetry)
+local Components = loadScript("/WIDGETS/ELRSTelemetry/ui/components.lua")(Display)
 
 -- ============================================================================
 -- Screen detection and UI loading
@@ -52,6 +53,7 @@ local WidgetUI = loadScript(uiPath)({
   Display = Display,
   bgOpacity = bgOpacity,
   WidgetLayout = WidgetLayout,
+  Components = Components,
 })
 
 -- ============================================================================

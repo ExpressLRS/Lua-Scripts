@@ -7,16 +7,20 @@ local ctx = ...
 local Display = ctx.Display
 local bgOpacity = ctx.bgOpacity
 local WidgetLayout = ctx.WidgetLayout
+local Components = ctx.Components
 
 local WidgetUI = {}
 
 -- Breakpoints: absolute pixel values for 480x272.
+-- wideW is the only width gate past the top bar: below it a zone is half the
+-- screen and the 1/1 layout drops to one column of groups.
 WidgetUI.breakpoints = {
   topBarW = 100,
   sixthH = 37,
   quarterH = 52,
   thirdH = 73,
   halfH = 108,
+  wideW = 340,
 }
 
 WidgetUI.fonts = {
@@ -206,19 +210,26 @@ function WidgetUI.buildHalf(w, h, opa)
   WidgetLayout.column(w, h, opa, rows)
 end
 
---- 1/1: full telemetry display with title.
+-- Font line heights, measured once. Fonts do not change under the widget, so
+-- there is nothing to invalidate; this only avoids re-measuring per build.
+local metrics
+local function measured()
+  if not metrics then
+    metrics = Components.measure()
+  end
+  return metrics
+end
+
+--- 1/1: the uplink panel between a status strip and the group rows.
+--- Everything but the fonts is shared, so the composition itself lives in
+--- ui/components.lua and this picks the hero size the tier can afford.
 function WidgetUI.buildFull(w, h, opa)
-  local rows = {
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = BOLD,
-      color = COLOR_THEME_SECONDARY1,
-      text = "ExpressLRS",
-    },
-  }
-  appendDataRows(rows)
-  WidgetLayout.column(w, h, opa, rows)
+  local m = measured()
+  Components.fullTier(w, h, opa, m, {
+    wide = w >= WidgetUI.breakpoints.wideW,
+    lqFont = MIDSIZE,
+    lqH = m.mid,
+  })
 end
 
 --- Route to the appropriate minimized layout based on widget dimensions.

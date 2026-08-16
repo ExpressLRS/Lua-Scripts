@@ -221,7 +221,10 @@ end
 
 -- Above this the receiver is saturated and more signal buys nothing, so it is
 -- where the headroom scale tops out rather than the strongest RSSI seen.
-local RSSI_CEILING = -50
+-- Public because it is the headroom bar's right endpoint, and a layout file
+-- printing its own -50 would be a second copy of the same decision.
+Telemetry.RSSI_CEILING = -50
+local RSSI_CEILING = Telemetry.RSSI_CEILING
 
 --- Recompute the smoothed signal headroom from the snapshot.
 -- 0% puts the active antenna exactly on the RF mode's rated floor and 100%

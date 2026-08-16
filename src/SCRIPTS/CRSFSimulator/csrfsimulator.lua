@@ -1833,6 +1833,13 @@ local sensorJitter = {
   Alt = 5,
 }
 
+-- Upper bounds the jitter may not cross, for sensors whose range is fixed by
+-- what they measure rather than by the scenario.
+local sensorCeiling = {
+  RQly = 100,
+  TQly = 100,
+}
+
 -- Per-scenario sensors that step through a fixed sequence instead of jittering,
 -- so both branches of an enum sensor are reachable within one simulator run.
 -- Takes precedence over sensorJitter and over the scenario's base value; one
@@ -1897,6 +1904,13 @@ local function updateTelemetryCache()
       local val = base + (math.random() * 2 - 1) * jit
       if jit == math.floor(jit) then
         val = math.floor(val + 0.5)
+      end
+      -- A link quality is a percentage of packets received, so it cannot
+      -- exceed 100. Jittering a base of 99 was handing the widgets 101, which
+      -- is not a reading any receiver can produce.
+      local ceiling = sensorCeiling[sensorId]
+      if ceiling and val > ceiling then
+        val = ceiling
       end
       telemetryCache[sensorId] = val
     else
