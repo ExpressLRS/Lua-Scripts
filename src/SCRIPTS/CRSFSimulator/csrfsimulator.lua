@@ -28,9 +28,15 @@ local shim = loadScript("/SCRIPTS/CRSFSimulator/shim.lua")()
 --   "model_mismatch" TX + RX connected but with Model ID mismatch flag set.
 --                    Triggers the Model Mismatch warning dialog.
 --   "mismatch_cycle" Model-mismatch link that drops and returns (~10 s up,
---                    ~5 s down, forever). Exercises the per-connection status
---                    poll latch: one ELRS_STATUS request per connected phase,
---                    and the mismatch warning must clear while the link is down.
+--                    ~5 s down, forever). One ELRS_STATUS request on each
+--                    connect edge and then ~1 Hz for as long as the mismatch
+--                    stands; the warning must clear while the link is down.
+--   "mismatch_recovery" TX + RX connected on a strong link with the model
+--                    mismatch flag set, clearing ~10 s in while RQly never
+--                    leaves 95. The transition a once-per-connection status
+--                    latch can never observe: the module only reports the
+--                    verdict when asked, so the warning clears only if the
+--                    widget keeps asking while it stands.
 --   "weak_link"      TX + RX connected on a marginal link (RQly ~60, RSSI
 --                    ~-85 dBm). Both the model-match poll and the VTX Admin
 --                    folder poll must stay quiet here.
@@ -1105,6 +1111,10 @@ updateTlmBandwidth(txDevice)
 local reconnectDelay = 500 -- ~5 seconds (getTime() ticks at 10ms)
 local startTime = nil -- set on first mockPush/mockPop call
 
+-- Mismatch recovery scenario timing: how long the mismatch stands before the
+-- module starts answering that it is gone, with the link untouched throughout.
+local mismatchClearDelay = 1000 -- ~10 seconds (getTime() ticks at 10ms)
+
 -- Dynamic RX availability (replaces static hasRxDevice boolean)
 local function isRxAvailable()
   if config.scenario == "reconnect" then
@@ -1141,6 +1151,11 @@ local function getElrsFlags()
     flags = isRxAvailable() and 0x01 or 0x00
   elseif config.scenario == "model_mismatch" or config.scenario == "mismatch_cycle" then
     flags = 0x05 -- connected + model mismatch
+  elseif config.scenario == "mismatch_recovery" then
+    -- Recomputed per answer, exactly as sendELRSstatus() does: the mismatch
+    -- ends on its own with the link still up, and nothing announces it.
+    local cleared = startTime ~= nil and getTime() - startTime >= mismatchClearDelay
+    flags = cleared and 0x01 or 0x05
   elseif config.scenario == "armed" then
     flags = 0x09 -- connected + armed
   elseif config.scenario == "critical_error" then
@@ -1667,6 +1682,19 @@ local scenarioTelemetry = {
   -- Same signal as model_mismatch; RQly is driven by sensorToggle so the link
   -- drops and returns forever (~10 s up, ~5 s down).
   mismatch_cycle = {
+    TPWR = 50,
+    RFMD = 7,
+    ["1RSS"] = -55,
+    ["2RSS"] = -58,
+    RQly = 95,
+    ANT = 1,
+    RxBt = 15.8,
+    Curr = 0.5,
+  },
+  -- Same signal as model_mismatch, and deliberately no sensorToggle entry: the
+  -- mismatch bit is the only thing that may move, so RQly stays at 95 and the
+  -- connection never edges.
+  mismatch_recovery = {
     TPWR = 50,
     RFMD = 7,
     ["1RSS"] = -55,

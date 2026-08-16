@@ -21,6 +21,12 @@ local function create(zone, options)
     ---@diagnostic disable-next-line: need-check-nil
     _elrsInfoSingleton = getElrsInfo(_crsfSingleton)
   end
+  -- Every model has its own widgets, so create() runs again for each of them
+  -- on a model change -- but the singletons above do not go with them. They
+  -- are globals in the widget Lua state, which only boot and resume from
+  -- shutdown rebuild, so the verdict the previous model's link gave would
+  -- carry into this one. Drop it here and ask again.
+  _elrsInfoSingleton:resetModelMatch()
   local loadable = loadScript("/WIDGETS/" .. name .. "/loadable.lua")
   ---@diagnostic disable-next-line: need-check-nil
   return loadable(zone, options, _crsfSingleton, _elrsInfoSingleton)

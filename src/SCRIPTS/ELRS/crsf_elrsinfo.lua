@@ -3,7 +3,7 @@
 --                                                                       --
 -- Opt-in stateful companion to the CRSF singleton: DEVICE_INFO cache    --
 -- (module name, version-keyed RFMOD/RFRSSI lookup tables) and the       --
--- per-connection model-match status, fed by drain(). Loaded once per    --
+-- model-match status, fed by drain(). Loaded once per                   --
 -- Lua state and shared by every widget instance; widgets that do not    --
 -- need this data never load it, so they never pay for the tables.       --
 --                                                                       --
@@ -24,9 +24,9 @@ local ElrsInfo = {}
 -- name, isElrs, RFMOD, RFRSSI
 ElrsInfo.deviceInfo = {}
 
--- Model match comes from the ELRS_STATUS answer updateModelMatch() requests
--- once per connection: a connect-time snapshot, fine for model match, which
--- is decided at connect.
+-- Model match comes from the ELRS_STATUS answers updateModelMatch() asks for.
+-- The module recomputes the flag as it answers and never sends one unasked, so
+-- the value is exactly as old as the last answer.
 ---@type boolean?
 ElrsInfo.modelMismatch = nil
 
@@ -36,9 +36,9 @@ ElrsInfo._lastDevPoll = 0
 -- ELRS status polling
 ElrsInfo._lastStatusPoll = 0
 
--- Set once the current connection's ELRS_STATUS answer has arrived, so each
--- connection is polled for model match at most once. Cleared with the rest of
--- the per-connection state on any hasTelemetry edge in update().
+-- Set once an ELRS_STATUS answer has arrived, so a match is asked about once
+-- rather than polled. Cleared with the rest of the per-connection state on any
+-- hasTelemetry edge in update(), and by resetModelMatch() on widget create.
 ---@type boolean?
 ElrsInfo._statusAnswered = nil
 
@@ -82,31 +82,61 @@ local function requestDeviceInfo()
   crsf:pingDevices(crsf.CONST.ADDRESS_TX)
 end
 
--- Weakest link updateModelMatch() will spend a frame on: a mismatch is caught
--- next to the quad, and on a marginal link every RC-channels frame matters.
+-- Weakest link a status request will be spent on (rule 4 below).
 local MODEL_MATCH_MIN_RSSI = -70
 
---- Keep modelMismatch current at about one status request per connection.
--- requestElrsStatus() is answered locally, but still replaces one RC-channels
--- frame on the handset->module UART, so it is sent only when it can matter
--- and can be afforded: while connected, from a module that identifies as
--- ExpressLRS (other CRSF modules never answer the fieldId=0 convention), on
--- a strong link, and only until the current connection's answer arrives.
--- Retries at most once per second while unanswered.
-local function updateModelMatch()
-  if not (crsf.hasTelemetry and ElrsInfo.deviceInfo.isElrs) or ElrsInfo._statusAnswered then
-    return
+--- Whether a status request is worth the frame it costs, right now.
+-- requestElrsStatus() is answered locally by the module, but the push still
+-- replaces one RC-channels frame on the handset->module UART, so every rule
+-- below weighs one answer against one frame. All of them must hold.
+local function canRequestStatus(now)
+  -- 1. Connected. The module reports no model-match verdict without a link,
+  --    and the answer would carry nothing to display.
+  if not crsf.hasTelemetry then
+    return false
   end
+  -- 2. ExpressLRS. The fieldId=0 request is an ELRS convention; a TBS module
+  --    answers device pings but never this, and would be asked forever.
+  if not ElrsInfo.deviceInfo.isElrs then
+    return false
+  end
+  -- 3. No answer yet, or the last one was a mismatch. One answer settles a
+  --    match, but the module recomputes the flag as it answers and announces
+  --    nothing on its own, while every way out of a mismatch -- receiver
+  --    number, model select, the tool's Model Match switch, a rebind -- is
+  --    applied over a link the handset never sees drop. Latching there would
+  --    pin the warning on screen for the rest of the session.
+  if ElrsInfo._statusAnswered and not ElrsInfo.modelMismatch then
+    return false
+  end
+  -- 4. Strong link. A mismatch is caught next to the quad; out at range every
+  --    RC-channels frame is worth more than the answer is.
   local rssi = getActiveRssi()
   if rssi == nil or rssi <= MODEL_MATCH_MIN_RSSI then
-    return
+    return false
   end
+  -- 5. At most once per second, which is as fresh as an answer gets: the
+  --    module latches its own packet counters on a 1 s watchdog.
+  return now - ElrsInfo._lastStatusPoll >= 100
+end
+
+--- Keep modelMismatch current, one request per second at the very most.
+local function updateModelMatch()
   local now = getTime()
-  if now - ElrsInfo._lastStatusPoll < 100 then
+  if not canRequestStatus(now) then
     return
   end
   ElrsInfo._lastStatusPoll = now
   crsf:requestElrsStatus()
+end
+
+--- Forget the model-match verdict, so the next tick asks for a fresh one.
+-- Called from widget create(), which runs again for every instance of every
+-- model; this singleton outlives them, so without it the previous model's
+-- verdict carries over. deviceInfo stays -- the module did not change.
+function ElrsInfo:resetModelMatch()
+  self.modelMismatch = nil
+  self._statusAnswered = nil
 end
 
 --- Per-tick pump; call right after drain() so the tick's frames are
