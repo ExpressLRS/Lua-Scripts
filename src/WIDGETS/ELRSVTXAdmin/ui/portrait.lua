@@ -20,14 +20,19 @@ WidgetUI.breakpoints = {
   quarterH = 100,
   thirdH = 140,
   halfH = 210,
+  -- From here up a 1/3 zone spans the screen rather than half of it: the whole
+  -- cheatsheet goes on one row, and the band steps up to the size that width
+  -- affords. 320px is all there is, so the cheatsheet cannot follow it.
+  thirdWideW = 240,
 }
 
 WidgetUI.fonts = {
   sixth = { status = BOLD },
   quarter = { status = BOLD },
   third = { status = BOLD, cheatsheet = STDSIZE },
+  thirdWide = { status = MIDSIZE, cheatsheet = STDSIZE },
   half = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
-  full = { hero = MIDSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
+  full = { hero = DBLSIZE, detail = SMLSIZE, cheatsheet = STDSIZE },
 }
 
 -- ============================================================================
@@ -169,74 +174,28 @@ function WidgetUI.buildQuarter(w, h, opa)
   WidgetLayout.column(w, h, opa, rows)
 end
 
---- 1/3: title + status + cheatsheet.
---- Fixed-width status column prevents layout jumping when values change.
---- Loading state uses unconstrained label to avoid overflow in narrow columns.
+--- 1/3: the headline, then the cheatsheet.
+--- The name shares the headline with the reading rather than taking a line of
+--- its own, as it does at 1/4: at one size, told apart by colour, they read as a
+--- caption and its value. The line that buys puts the whole cheatsheet on one
+--- row where the zone spans the screen; a half-width zone keeps the two rows.
 function WidgetUI.buildThird(w, h, opa)
-  local c1w = math.floor(w * 0.28)
-  local rows = {}
-  -- Title row
-  rows[#rows + 1] = {
-    type = lvgl.LABEL,
-    font = BOLD,
-    color = COLOR_THEME_SECONDARY1,
-    text = "VTX Admin",
-  }
-  -- Loading state: full-width status label
-  rows[#rows + 1] = {
-    type = lvgl.LABEL,
-    align = LEFT,
-    font = BOLD,
-    color = VTXDisplay.mainColor,
-    text = VTXDisplay.statusText,
-    visible = VTXDisplay.showStatus,
-  }
-  -- Active state: fixed-width band column + detail
-  rows[#rows + 1] = {
-    type = lvgl.BOX,
-    w = w,
-    align = LEFT + VCENTER,
-    flexFlow = lvgl.FLOW_ROW,
-    flexPad = lvgl.PAD_TINY,
-    borderPad = 0,
-    visible = VTXDisplay.showChannel,
-    children = {
-      {
-        type = lvgl.LABEL,
-        w = c1w,
-        align = LEFT,
-        font = WidgetUI.fonts.third.status,
-        color = VTXDisplay.mainColor,
-        text = VTXDisplay.bandChannel,
-      },
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = COLOR_THEME_SECONDARY1,
-        text = detailLine,
-      },
-    },
-  }
-  -- Cheatsheet rows
-  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.third.cheatsheet)
-  if cs1 then
-    rows[#rows + 1] = cs1
-    rows[#rows + 1] = cs2
-  end
-
-  WidgetLayout.column(w, h, opa, rows)
-end
-
---- 1/2: title + band/channel + detail + cheatsheet.
-function WidgetUI.buildHalf(w, h, opa)
-  local rows = {
+  local wide = w >= WidgetUI.breakpoints.thirdWideW
+  local f = wide and WidgetUI.fonts.thirdWide or WidgetUI.fonts.third
+  local extras = {
     {
       type = lvgl.LABEL,
-      font = BOLD,
+      align = LEFT,
+      font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
-      text = "VTX Admin",
+      -- Already the short form on this screen, so there is nothing terser to
+      -- fall back to on a narrow zone.
+      text = detailLine,
+      visible = VTXDisplay.showChannel,
     },
+  }
+  local rows = {
+    VTXDisplay.buildHeadline(w, f.status, extras),
     {
       type = lvgl.LABEL,
       align = LEFT,
@@ -245,23 +204,28 @@ function WidgetUI.buildHalf(w, h, opa)
       text = VTXDisplay.statusText,
       visible = VTXDisplay.showStatus,
     },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = WidgetUI.fonts.half.hero,
-      color = VTXDisplay.mainColor,
-      text = VTXDisplay.bandChannel,
-      visible = VTXDisplay.showChannel,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = SMLSIZE,
-      color = COLOR_THEME_SECONDARY1,
-      text = detailLong,
-    },
   }
-  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.half.cheatsheet)
+  if wide then
+    local cs = VTXDisplay.buildCheatsheet(f.cheatsheet)
+    if cs then
+      rows[#rows + 1] = cs
+    end
+  else
+    local cs1, cs2 = VTXDisplay.buildCheatsheetRows(f.cheatsheet)
+    if cs1 then
+      rows[#rows + 1] = cs1
+      rows[#rows + 1] = cs2
+    end
+  end
+
+  WidgetLayout.column(w, h, opa, rows)
+end
+
+--- 1/2: title + band/channel + detail + cheatsheet.
+function WidgetUI.buildHalf(w, h, opa)
+  local f = WidgetUI.fonts.half
+  local rows = VTXDisplay.buildHeroRows(f, detailLong)
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(f.cheatsheet)
   if cs1 then
     rows[#rows + 1] = cs1
     rows[#rows + 1] = cs2
@@ -272,38 +236,9 @@ end
 
 --- 1/1: title + MIDSIZE band/channel + detail + cheatsheet.
 function WidgetUI.buildFull(w, h, opa)
-  local rows = {
-    {
-      type = lvgl.LABEL,
-      font = BOLD,
-      color = COLOR_THEME_SECONDARY1,
-      text = "VTX Admin",
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = BOLD,
-      color = VTXDisplay.mainColor,
-      text = VTXDisplay.statusText,
-      visible = VTXDisplay.showStatus,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = WidgetUI.fonts.full.hero,
-      color = VTXDisplay.mainColor,
-      text = VTXDisplay.bandChannel,
-      visible = VTXDisplay.showChannel,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = WidgetUI.fonts.full.detail,
-      color = COLOR_THEME_SECONDARY1,
-      text = VTXDisplay.detailLong,
-    },
-  }
-  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(WidgetUI.fonts.full.cheatsheet)
+  local f = WidgetUI.fonts.full
+  local rows = VTXDisplay.buildHeroRows(f, detailLong)
+  local cs1, cs2 = VTXDisplay.buildCheatsheetRows(f.cheatsheet)
   if cs1 then
     rows[#rows + 1] = cs1
     rows[#rows + 1] = cs2

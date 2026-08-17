@@ -59,23 +59,23 @@ function Components.textWidth(s, font)
 end
 
 --- Split a widget zone into the panel rect and the content rect inside it.
---- The panel is inset from the zone rather than filling it, so two widgets
---- placed side by side do not end up sharing one edge, and the content is
---- inset again from the panel's own border rather than sitting against it --
---- full-width bars in particular read as spilling out of the panel when they
---- start and end on its border.
---- Both insets come off the theme's own padding, so they scale with the screen
---- instead of being 6px on a 480 and 6px on an 800.
+--- The panel fills the zone and the breathing room is padding inside it. A
+--- widget that inset its panel instead would sit a couple of pixels in from
+--- every neighbour on the screen, and the gap reads as a misalignment rather
+--- than as space -- the zone boundaries are the screen's grid, and they are not
+--- this widget's to redraw.
+--- The padding is lvgl.PAD_SMALL because that is the borderPad the ELRS VTX
+--- Admin widget's container uses (ELRSVTXAdmin/ui/display.lua:19-44), so the
+--- two stack with their text on one left edge. It also comes off the theme's
+--- own scale rather than being 4px on a 480 and 4px on an 800.
 --- panel is absolute; inner is relative to the panel, because lvgl positions
 --- children against their parent's origin.
 function Components.frame(w, h, m)
-  local margin = m.gap
-  local pad = m.pad + 2
   return {
-    panel = { x = margin, y = margin, w = w - margin * 2, h = h - margin * 2 },
-    inner = { x = pad, w = w - margin * 2 - pad * 2 },
-    pad = pad,
-    h = h - margin * 2,
+    panel = { x = 0, y = 0, w = w, h = h },
+    inner = { x = m.pad, w = w - m.pad * 2 },
+    pad = m.pad,
+    h = h,
   }
 end
 
@@ -85,7 +85,14 @@ end
 
 --- Background panel. Returns the child list to compose into, so everything
 --- placed afterwards is positioned relative to the panel's own origin.
---- Two rectangles because a rectangle is filled or bordered, never both.
+--- A fill and a separate container, the same shape the VTX Admin widget's
+--- WidgetLayout uses, and for the same two reasons: opacity applies to the
+--- object rather than only its background, so the content cannot live inside
+--- the translucent rectangle, and a borderless container puts the content
+--- origin exactly on the zone corner. An outlined panel was tried and reads as
+--- a card glued over the background while every widget beside it is painted on
+--- -- and a border also eats a pixel off each side of the content box, which is
+--- enough to make symmetric padding come out lopsided.
 function Components.panel(dst, rect, spec)
   local children = {}
   dst[#dst + 1] = {
@@ -104,8 +111,7 @@ function Components.panel(dst, rect, spec)
     y = rect.y,
     w = rect.w,
     h = rect.h,
-    color = COLOR_THEME_SECONDARY2,
-    thickness = 1,
+    thickness = 0,
     children = children,
   }
   return children
@@ -115,9 +121,8 @@ end
 --- A filled rectangle, not an hline: hline has no thickness property, an
 --- unknown key raises, and lvgl.build() swallows the error along with the
 --- whole tree.
---- COLOR_THEME_SECONDARY2 is the obvious choice and the wrong one -- it is
---- what the panel edge uses, and against COLOR_THEME_PRIMARY2 at 1px it
---- simply does not appear.
+--- COLOR_THEME_SECONDARY2 is the obvious choice for a divider and the wrong
+--- one: against COLOR_THEME_PRIMARY2, at 1px, it simply does not appear.
 function Components.rule(dst, rect, y)
   dst[#dst + 1] = {
     type = lvgl.RECTANGLE,
@@ -362,12 +367,21 @@ function Components.statusStrip(dst, rect, y, m, spec)
   if spec.power and meterFits then
     Components.powerGroup(dst, { x = powerX }, y, m)
   elseif spec.power or spec.powerText then
-    -- No room for the meter, so the reading itself takes the gap. The meter
-    -- is the first thing to go and the number is the last, because "50 mW"
-    -- still answers the question a lit cell count only illustrates.
+    -- No room for the meter, so the reading itself takes the gap. The meter is
+    -- the first thing to go and the number is the last, because "50 mW" still
+    -- answers the question a lit cell count only illustrates.
+    -- Anchored to the antenna cells, not left-aligned off the RF mode. Left
+    -- aligned it lands wherever the reserved width of "K1000Full" happens to
+    -- end, which on a half-width strip is hard against the cells -- and
+    -- "50 mW ANT" reads as one phrase. From the right the gap is the same at
+    -- every width, and the box still starts no earlier than the RF mode allows.
+    local right = antX - m.pad * 2
+    local px = math.max(rect.x, math.min(powerX, right - Components.textWidth("2000 mW", SMLSIZE)))
     Components.label(dst, {
-      x = powerX,
+      x = px,
       y = y,
+      w = math.max(1, right - px),
+      align = RIGHT,
       font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
       text = Display.powerText,
@@ -690,14 +704,6 @@ function Components.fullTier(w, h, opa, m, spec)
   local panel = Components.panel(root, f.panel, { opacity = opa })
 
   local y = Components.statusStrip(panel, inner, pad, m, { power = wide })
-  if not wide then
-    -- Half width cannot fit the meter in the strip, so it takes its own row
-    -- directly under it -- above the uplink panel, not below the group rows.
-    -- TX power is link configuration, like the RF mode and the antenna it now
-    -- sits with; putting it last filed it under the flight controller's
-    -- readings, which is not what it is.
-    y = Components.powerGroup(panel, inner, y + m.gap, m)
-  end
   y = Components.rule(panel, inner, y + air)
   y = Components.uplinkPanel(panel, inner, y + air, m, {
     lqFont = spec.lqFont,
@@ -708,6 +714,15 @@ function Components.fullTier(w, h, opa, m, spec)
     endpoints = wide,
   })
   y = Components.rule(panel, inner, y + air) + air
+  if not wide then
+    -- Half width has no gap in the strip wide enough for the meter, so TX power
+    -- takes its own row at the head of the captioned groups. Header, meter,
+    -- reading is the same shape DOWNLINK and BATTERY have, so it reads as one of
+    -- them rather than as something wedged under the strip -- and it leads them
+    -- because it is what the module is transmitting at, where the rows below it
+    -- are what came back from the aircraft.
+    y = Components.powerGroup(panel, inner, y, m) + m.gap
+  end
   for i = 1, #rows do
     y = Components.groupRow(panel, inner, y, m, rows[i])
   end
