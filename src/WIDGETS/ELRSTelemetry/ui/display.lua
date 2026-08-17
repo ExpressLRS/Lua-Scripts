@@ -118,23 +118,6 @@ function Display.trssText()
   return table.concat({ tostring(trss), " dBm" })
 end
 
---- The rated floor on its own, e.g. "-108", for the headroom bar's left
---- endpoint. Empty when there is no floor, which is also when the bar hides.
-function Display.sensText()
-  local sens = Telemetry.link.sens
-  if sens == nil then
-    return ""
-  end
-  return tostring(sens)
-end
-
---- The headroom bar's right endpoint, the RSSI above which more signal buys
---- nothing. A property of the scale, so it comes from the state, not a literal
---- in a layout file.
-function Display.ceilingText()
-  return tostring(Telemetry.RSSI_CEILING)
-end
-
 --- TX power on its own, e.g. "100 mW", or "--" while unknown.
 function Display.powerText()
   local tpwr = Telemetry.link.tpwr
@@ -172,6 +155,17 @@ function Display.lqText()
   return table.concat({ "LQ ", tostring(Telemetry.link.rqly or 0), "%" })
 end
 
+--- The bare LQ number for the hero figure, e.g. "99", or "--" while
+--- disconnected. No caption and no unit: the tier draws those as its own
+--- fixed label, so the number can take a display font without dragging a
+--- "%" the same size along.
+function Display.lqHeroText()
+  if not Telemetry.isConnected() then
+    return "--"
+  end
+  return tostring(Telemetry.link.rqly or 0)
+end
+
 --- Active antenna RSSI, e.g. "-87dBm", or "" while unknown.
 --- sep is the gap between the number and the unit: "" in tight minimized
 --- layouts, " " where the full-screen rows have room for it.
@@ -188,11 +182,41 @@ function Display.heroText()
   return Display.statusText() or Display.lqText()
 end
 
---- Active RSSI against the rate's rated floor, e.g. "-90 / -112 dBm".
+--- RSSI against the rate's rated floor, e.g. "-90 / -112 dBm".
 --- The pair is the point: RSSI alone says nothing until you know what the
 --- receiver can still hear at, and that figure moves with the packet rate.
---- Drops to the reading alone when the rate is unrated.
+--- On diversity hardware both antennas appear ("-85 -92 / -112 dBm") in
+--- fixed 1-2 order, so neither number jumps position when the RX switches
+--- paths. Drops the floor when the rate is unrated.
 function Display.signalText()
+  if not Telemetry.isConnected() then
+    return ""
+  end
+  local rssi = Telemetry.activeRssi()
+  if rssi == nil then
+    return ""
+  end
+  local parts
+  if Telemetry.hasDiversity() then
+    parts = { tostring(Telemetry.link.rssi1 or "--"), " ", tostring(Telemetry.link.rssi2) }
+  else
+    parts = { tostring(rssi) }
+  end
+  local sens = Telemetry.link.sens
+  if sens ~= nil then
+    parts[#parts + 1] = " / "
+    parts[#parts + 1] = tostring(sens)
+  end
+  parts[#parts + 1] = " dBm"
+  return table.concat(parts)
+end
+
+--- The signal pair in its narrowest form: the active antenna alone against
+--- the floor. The compact tier reserves a fixed box for this reading, and the
+--- diversity pair is wider than the box can be without pushing the hero into
+--- wrapping -- so the tightest tier shows the path the link is on, the same
+--- trade its width ladder already makes with the antenna cells.
+function Display.signalShortText()
   if not Telemetry.isConnected() then
     return ""
   end
@@ -223,19 +247,6 @@ function Display.rfDetailText()
     parts[#parts + 1] = table.concat({ tostring(tpwr), "mW" })
   end
   return table.concat(parts, " ")
-end
-
---- Battery text for minimized layouts, e.g. "Bat 4S 3.80V".
-function Display.batteryText()
-  local vbat = Telemetry.link.vbat
-  if vbat == nil or vbat <= 0 then
-    return ""
-  end
-  local cells = Telemetry.cellCnt
-  if cells then
-    return string.format("Bat %dS %.2fV", cells, vbat / cells)
-  end
-  return string.format("Bat %.2fV", vbat)
 end
 
 --- Battery text for the full-screen row, e.g. "4S 3.80V (15.20V)".
@@ -379,32 +390,6 @@ function Display.ledColor()
   return Display.lqBarColor()
 end
 
--- ExpressLRS power ladder in mW. The meter counts steps on this rather than
--- scaling a percentage, because the steps are what the module actually offers
--- and 100 mW is halfway up the ladder but 5% of the range.
-local POWER_STEPS = { 10, 25, 50, 100, 250, 500, 1000, 2000 }
-
---- How many power steps are lit, 0 to #POWER_STEPS.
-function Display.powerSteps()
-  local tpwr = Telemetry.link.tpwr
-  if tpwr == nil then
-    return 0
-  end
-  local n = 0
-  for i = 1, #POWER_STEPS do
-    if tpwr >= POWER_STEPS[i] then
-      n = i
-    end
-  end
-  return n
-end
-
---- Total cells in the power meter, so a layout can size it without knowing
---- the ladder.
-function Display.powerStepCount()
-  return #POWER_STEPS
-end
-
 --- Colour for antenna cell n (1 or 2): lit when that path is the active one.
 --- A factory, not a callback -- call it when building.
 function Display.antColor(n)
@@ -440,23 +425,6 @@ function Display.detailColor()
     return COLOR_THEME_SECONDARY1
   end
   return Display.healthTextColor(level)
-end
-
---- Hero label font for one tier of a screen's WidgetUI.fonts table.
---- Status text ("No CRSF module") is far longer than "LQ 100%", so tiers that
---- would overflow declare a smaller heroStatus and drop to it while a status
---- shows. Tiers without one get the constant back, so no callback runs per
---- frame. This is a factory, not a callback: call it when building.
-function Display.heroFont(tier)
-  if not tier.heroStatus then
-    return tier.hero
-  end
-  return function()
-    if Display.statusText() then
-      return tier.heroStatus
-    end
-    return tier.hero
-  end
 end
 
 -- ============================================================================
