@@ -167,19 +167,10 @@ function Display.tqlyText()
   return table.concat({ tostring(tqly), " %" })
 end
 
---- Downlink RSSI, e.g. "-95". Captioned TRSS by its callers.
+--- Downlink RSSI, e.g. "-95 dBm". Captioned TRSS by its callers.
+--- The unit is not optional: TQly sits beside this on the same row in
+--- percent, and a bare -95 next to a percentage invites reading it as one.
 function Display.trssText()
-  local trss = Telemetry.link.trss
-  if not Telemetry.isConnected() or trss == nil then
-    return "--"
-  end
-  return tostring(trss)
-end
-
---- The same with its unit, for rows wide enough to carry one.
---- A separate zero-argument function rather than a parameter, because these
---- are handed to LVGL by reference and called with no arguments.
-function Display.trssTextUnit()
   local trss = Telemetry.link.trss
   if not Telemetry.isConnected() or trss == nil then
     return "--"

@@ -543,16 +543,17 @@ end
 -- The 1/1 tier
 -- ============================================================================
 
-local function downlinkGroup(compact, headed)
+--- The downlink pair. TRSS always carries dBm: a bare -94 beside a
+--- percentage invites reading it as one, and the two numbers on this row are
+--- in different units. The unit is not something the width ladder may trade
+--- away, so what gives instead is the pack total, then the row, then the
+--- header.
+local function downlinkGroup(headed)
   return {
     header = headed and "DOWNLINK" or "",
     values = {
       { caption = "TQly", text = Display.tqlyText, sample = "100 %" },
-      {
-        caption = "TRSS",
-        text = compact and Display.trssText or Display.trssTextUnit,
-        sample = compact and "-105" or "-105 dBm",
-      },
+      { caption = "TRSS", text = Display.trssText, sample = "-105 dBm" },
     },
   }
 end
@@ -588,16 +589,16 @@ local function groupRows(w, m)
     return total <= w
   end
 
-  if fits(downlinkGroup(false, true), batteryGroup(false)) then
-    return { { downlinkGroup(false, true), batteryGroup(false) } }
+  if fits(downlinkGroup(true), batteryGroup(false)) then
+    return { { downlinkGroup(true), batteryGroup(false) } }
   end
-  if fits(downlinkGroup(true, true), batteryGroup(true)) then
-    return { { downlinkGroup(true, true), batteryGroup(true) } }
+  if fits(downlinkGroup(true), batteryGroup(true)) then
+    return { { downlinkGroup(true), batteryGroup(true) } }
   end
-  if fits(downlinkGroup(true, true)) then
-    return { { downlinkGroup(true, true) }, { batteryGroup(true) } }
+  if fits(downlinkGroup(true)) then
+    return { { downlinkGroup(true) }, { batteryGroup(true) } }
   end
-  return { { downlinkGroup(true, false) }, { batteryGroup(true) } }
+  return { { downlinkGroup(false) }, { batteryGroup(true) } }
 end
 
 --- The whole 1/1 tier: status strip, uplink panel, group rows.
