@@ -308,7 +308,7 @@ function Components.statusStrip(dst, rect, y, m, spec)
     x = textX,
     y = y,
     font = BOLD,
-    color = RED,
+    color = COLOR_THEME_WARNING,
     -- A constant label plus a bool closure, not a formatter: statusText()
     -- keeps title case for the full-screen subtitle it also feeds, and a
     -- string closure would be hashed every frame to say the same thing.
@@ -360,7 +360,11 @@ function Components.powerGroup(dst, rect, y, m)
   Components.segments(dst, { x = rect.x + headW, w = meterW }, y + 2, {
     count = Display.powerStepCount(),
     h = m.sml - 4,
-    color = COLOR_THEME_PRIMARY1,
+    -- Accent, not COLOR_THEME_PRIMARY1. The lit cells are a filled area, and
+    -- the text colour used as a fill is a black bar sitting on a blue panel.
+    -- Power is also not a health reading -- 500 mW is not worse than 50 -- so
+    -- it deliberately stays off the green/amber/red ramp.
+    color = COLOR_THEME_FOCUS,
     steps = Display.powerSteps,
   })
   Components.label(dst, {

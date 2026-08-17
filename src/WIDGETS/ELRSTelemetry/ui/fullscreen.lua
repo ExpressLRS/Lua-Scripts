@@ -134,7 +134,7 @@ function FullScreenUI.build()
     {
       type = lvgl.LABEL,
       font = BOLD,
-      color = RED,
+      color = COLOR_THEME_WARNING,
       text = "Model Mismatch — RC commands not sent",
       visible = Display.isMismatch,
     },

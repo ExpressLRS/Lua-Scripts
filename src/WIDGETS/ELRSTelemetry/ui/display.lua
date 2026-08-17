@@ -318,7 +318,7 @@ end
 --- Hero label colour: red only while a connected link reports a mismatch.
 function Display.heroColor()
   if Telemetry.isMismatch() then
-    return RED
+    return COLOR_THEME_WARNING
   end
   return COLOR_THEME_PRIMARY1
 end
@@ -475,7 +475,11 @@ function Display.antColor(n)
     -- ANT is 0-based and the cells are 1-based, same convention as the
     -- full-screen page's "Ant 1" / "Ant 2" rows.
     if (Telemetry.link.ant or 0) + 1 == n then
-      return COLOR_THEME_PRIMARY1
+      -- The theme's accent, not COLOR_THEME_PRIMARY1: that is the text colour,
+      -- RGB(0,0,0) on the light themes, and a filled black block is not text.
+      -- This cell means "the link is on this path", which is what the accent
+      -- says everywhere else in EdgeTX.
+      return COLOR_THEME_FOCUS
     end
     return COLOR_THEME_DISABLED
   end

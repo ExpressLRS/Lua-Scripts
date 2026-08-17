@@ -18,7 +18,7 @@ local TopBarUI = {}
 --- Display.heroColor uses PRIMARY1.
 local function mismatchColor()
   if Display.isMismatch() then
-    return RED
+    return COLOR_THEME_WARNING
   end
   return COLOR_THEME_PRIMARY2
 end
