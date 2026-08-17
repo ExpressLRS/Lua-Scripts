@@ -58,6 +58,27 @@ function Components.textWidth(s, font)
   return (lcd.sizeText(s, font))
 end
 
+--- Split a widget zone into the panel rect and the content rect inside it.
+--- The panel is inset from the zone rather than filling it, so two widgets
+--- placed side by side do not end up sharing one edge, and the content is
+--- inset again from the panel's own border rather than sitting against it --
+--- full-width bars in particular read as spilling out of the panel when they
+--- start and end on its border.
+--- Both insets come off the theme's own padding, so they scale with the screen
+--- instead of being 6px on a 480 and 6px on an 800.
+--- panel is absolute; inner is relative to the panel, because lvgl positions
+--- children against their parent's origin.
+function Components.frame(w, h, m)
+  local margin = m.gap
+  local pad = m.pad + 2
+  return {
+    panel = { x = margin, y = margin, w = w - margin * 2, h = h - margin * 2 },
+    inner = { x = pad, w = w - margin * 2 - pad * 2 },
+    pad = pad,
+    h = h - margin * 2,
+  }
+end
+
 -- ============================================================================
 -- Elements
 -- ============================================================================
@@ -287,14 +308,24 @@ end
 --- teaches the eye to ignore the banner that matters.
 function Components.statusStrip(dst, rect, y, m, spec)
   local h = m.sml + 4
-  local r = math.floor(m.sml / 2) - 1
+  -- The LED gets a fixed lane sized off the row, and sits centred in it. The
+  -- lane is what the text after it measures from, so the dot's radius can be
+  -- tuned without the RF mode shifting sideways.
+  local lane = math.floor(m.sml / 2) + 2
+  -- Deliberately smaller than the lane. An indicator only has to be seen, and
+  -- at half the row height it stops reading as a dot and starts competing with
+  -- the text it sits beside.
+  local r = math.floor(m.sml / 4) + 1
   Components.led(dst, {
-    x = rect.x + r,
-    y = y + math.floor(h / 2),
+    x = rect.x + math.floor(lane / 2),
+    -- Centred on the text's line box, not on the strip. The strip is the line
+    -- box plus padding, so centring in it drops the dot below the RF mode it
+    -- sits beside -- close enough to look like a mistake rather than a choice.
+    y = y + math.floor(m.sml / 2),
     radius = r,
     color = Display.ledColor,
   })
-  local textX = rect.x + 2 * r + m.pad
+  local textX = rect.x + lane + m.pad
 
   Components.label(dst, {
     x = textX,
@@ -321,14 +352,16 @@ function Components.statusStrip(dst, rect, y, m, spec)
   local antX = rect.x + rect.w - antW
   Components.antenna(dst, { x = antX }, y, m)
 
-  -- The power meter fills the gap between the two only where there is one.
-  -- Measured against the widest rate name the tables carry, so a switch from
-  -- 25Hz to K1000Full never pushes the meter sideways.
+  -- The meter goes in the gap between the RF mode and the antenna cells, at
+  -- its natural width and only when it genuinely fits there. Its x is measured
+  -- against the widest rate name the tables carry, so switching from 25Hz to
+  -- K1000Full never pushes it sideways.
   local modeW = Components.textWidth("K1000Full", SMLSIZE)
   local powerX = textX + modeW + m.pad * 3
-  if spec.power then
-    Components.powerGroup(dst, { x = powerX, w = antX - powerX - m.pad * 3 }, y, m)
-  elseif spec.powerText then
+  local meterFits = powerX + Components.powerGroupWidth(m) <= antX
+  if spec.power and meterFits then
+    Components.powerGroup(dst, { x = powerX }, y, m)
+  elseif spec.power or spec.powerText then
     -- No room for the meter, so the reading itself takes the gap. The meter
     -- is the first thing to go and the number is the last, because "50 mW"
     -- still answers the question a lit cell count only illustrates.
@@ -344,11 +377,25 @@ function Components.statusStrip(dst, rect, y, m, spec)
   return y + h
 end
 
+--- Width of the TX POWER group, so a caller can place it without stretching
+--- it. The meter is sized off the row height rather than off the space
+--- available: a meter that grows to fill its container drags its own reading
+--- away from it, which leaves "50 mW" stranded at the far side of the strip
+--- with no visible tie to the cells it belongs to.
+function Components.powerGroupWidth(m)
+  return Components.textWidth("TX POWER ", SMLSIZE)
+    + Display.powerStepCount() * math.floor(m.sml / 2)
+    + m.pad
+    + Components.textWidth("2000 mW", SMLSIZE)
+end
+
 --- TX POWER as an inline group: header, stepped meter, value.
+--- Laid out left to right at its natural width, so the reading sits right
+--- after the cells it describes. Any slack in the strip stays to its right.
 function Components.powerGroup(dst, rect, y, m)
   local headW = Components.textWidth("TX POWER ", SMLSIZE)
   local valW = Components.textWidth("2000 mW", SMLSIZE)
-  local meterW = rect.w - headW - valW - m.pad
+  local meterW = Display.powerStepCount() * math.floor(m.sml / 2)
   Components.label(dst, {
     x = rect.x,
     y = y,
@@ -371,7 +418,10 @@ function Components.powerGroup(dst, rect, y, m)
     x = rect.x + headW + meterW + m.pad,
     y = y,
     w = valW,
-    align = RIGHT,
+    -- Left, so the reading starts a fixed gap from the meter. Right-aligning
+    -- it in a box wide enough for "2000 mW" would push "50 mW" away from the
+    -- cells again, which is the thing being fixed.
+    align = LEFT,
     font = SMLSIZE,
     text = Display.powerText,
     visible = Display.isNotMismatch,
@@ -615,8 +665,8 @@ end
 --- "looks basic" means.
 function Components.fullTier(w, h, opa, m, spec)
   local wide = spec.wide
-  local pad = m.pad
-  local inner = { x = pad, w = w - pad * 2 }
+  local f = Components.frame(w, h, m)
+  local pad, inner = f.pad, f.inner
   local rows = groupRows(inner.w, m)
 
   -- Everything except the two bars and the air between blocks. This has to
@@ -632,14 +682,22 @@ function Components.fullTier(w, h, opa, m, spec)
     + (wide and m.sml or 0) -- headroom endpoints
     + m.sml * #rows
     + (wide and 0 or m.sml + m.gap) -- narrow puts TX POWER on its own row
-  local slack = h - fixed
+  local slack = f.h - fixed
   local barH = math.max(4, math.min(math.floor(slack * 0.3), 26))
   local air = math.max(m.gap, math.floor((slack - barH * 2) / AIR_GAPS))
 
   local root = {}
-  local panel = Components.panel(root, { x = 0, y = 0, w = w, h = h }, { opacity = opa })
+  local panel = Components.panel(root, f.panel, { opacity = opa })
 
   local y = Components.statusStrip(panel, inner, pad, m, { power = wide })
+  if not wide then
+    -- Half width cannot fit the meter in the strip, so it takes its own row
+    -- directly under it -- above the uplink panel, not below the group rows.
+    -- TX power is link configuration, like the RF mode and the antenna it now
+    -- sits with; putting it last filed it under the flight controller's
+    -- readings, which is not what it is.
+    y = Components.powerGroup(panel, inner, y + m.gap, m)
+  end
   y = Components.rule(panel, inner, y + air)
   y = Components.uplinkPanel(panel, inner, y + air, m, {
     lqFont = spec.lqFont,
@@ -653,10 +711,6 @@ function Components.fullTier(w, h, opa, m, spec)
   for i = 1, #rows do
     y = Components.groupRow(panel, inner, y, m, rows[i])
   end
-  if not wide then
-    -- No room for the meter in a half-width strip, so it gets the last row.
-    Components.powerGroup(panel, inner, y + m.gap, m)
-  end
 
   lvgl.build(root)
 end
@@ -669,8 +723,8 @@ end
 --- bars are what the widget is for.
 --- TX power stays as the text in the strip; only the meter goes.
 function Components.halfTier(w, h, opa, m, spec)
-  local pad = m.pad
-  local inner = { x = pad, w = w - pad * 2 }
+  local f = Components.frame(w, h, m)
+  local pad, inner = f.pad, f.inner
   local battery = {
     header = "BATTERY",
     values = { { text = Display.cellText, sample = "4S 3.75 V" } },
@@ -687,17 +741,17 @@ function Components.halfTier(w, h, opa, m, spec)
   -- Battery is a whole group, so it goes before either bar is squeezed below
   -- the height at which it stops reading as a bar. That is the degradation
   -- order the whole layout follows: lose a row, keep the instruments.
-  local showBattery = Components.groupWidth(m, battery) <= inner.w and (h - fixed - m.sml) >= MIN_BAR * 2
+  local showBattery = Components.groupWidth(m, battery) <= inner.w and (f.h - fixed - m.sml) >= MIN_BAR * 2
   if showBattery then
     fixed = fixed + m.sml
   end
 
-  local slack = h - fixed
+  local slack = f.h - fixed
   local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.35), 20))
   local air = math.max(0, math.floor((slack - barH * 2) / AIR_GAPS))
 
   local root = {}
-  local panel = Components.panel(root, { x = 0, y = 0, w = w, h = h }, { opacity = opa })
+  local panel = Components.panel(root, f.panel, { opacity = opa })
 
   local y = Components.statusStrip(panel, inner, pad, m, { powerText = true })
   y = Components.uplinkPanel(panel, inner, y + air, m, {
