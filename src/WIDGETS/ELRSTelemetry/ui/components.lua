@@ -1036,9 +1036,10 @@ end
 --- with it. Two rows cannot hold a strip and a bar, and the bar is what this
 --- widget is: below the strip the choice is between a row of numbers any
 --- telemetry screen could show and the one instrument only this widget has.
---- LQ leads beside the name and the dBm pair takes the right margin -- the
---- same ends every taller tier gives them, so resizing the widget never
---- swaps the side a reading lives on.
+--- The name and the mode cell read as one phrase from the left -- the same
+--- grammar as the strip's "ExpressLRS 250Hz", in one font and one colour --
+--- and the link readings pack the right margin: LQ, then the dBm pair at
+--- the edge every taller tier gives it, beside the pair it qualifies.
 --- Then the packet rate and power come back as one cell where the width allows,
 --- and the name leads the row from beside the LED, as it does on the status
 --- strip -- a mark trailing at the end of the line reads as an afterthought,
@@ -1065,7 +1066,10 @@ function Components.compactTier(w, h, opa, m, spec)
     vpad = m.gap
     slack = f.h - (vpad * 2 + spec.lqH)
   end
-  local barH = slack >= MIN_BAR and math.max(MIN_BAR, math.min(math.floor(slack * 0.6), 12)) or 0
+  -- Capped where the taller tiers' fractions land in practice, so a widget
+  -- resized across the ladder keeps one bar weight: a roomy 1/4 zone used to
+  -- fill toward this cap's double while every other size drew ~6px.
+  local barH = slack >= MIN_BAR and math.max(MIN_BAR, math.min(math.floor(slack * 0.3), 6)) or 0
   local air = math.max(0, slack - barH)
   -- Small type beside a large number sits on its baseline, not its top.
   local drop = math.max(0, spec.lqH - m.sml)
@@ -1107,19 +1111,33 @@ function Components.compactTier(w, h, opa, m, spec)
     })
     textX = textX + Components.textWidth(brand, SMLSIZE) + m.pad * 2
   end
+  if showDetail then
+    Components.label(panel, {
+      x = textX,
+      y = y + drop,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = Display.rfDetailText,
+      -- Hidden with the other readings while the hero carries a status.
+      visible = Display.isNotMismatch,
+    })
+    textX = textX + detailW + m.pad * 2
+  end
+  local signalW = Components.textWidth("-105 / -105 dBm", SMLSIZE)
+  -- LQ's box spans the middle, right-aligned against the dBm pair: normally
+  -- only the reserved right end of it is inked, and a status -- the one long
+  -- string this label ever carries -- grows leftward across the row the
+  -- hidden readings have just emptied.
+  local heroRight = right - signalW - m.pad * 2
   Components.label(panel, {
     x = textX,
     y = y,
+    w = math.max(1, heroRight - textX),
+    align = RIGHT,
     font = spec.lqFont,
     color = Display.heroColor,
-    -- The status when there is one: no strip means no banner, so this label is
-    -- the only thing that can say the link is down or the model is wrong. Left
-    -- aligned, a long status grows rightward across the row the hidden
-    -- readings have just emptied.
     text = Display.heroText,
   })
-
-  local signalW = Components.textWidth("-105 / -105 dBm", SMLSIZE)
   Components.label(panel, {
     x = right - signalW,
     y = y + drop,
@@ -1130,20 +1148,6 @@ function Components.compactTier(w, h, opa, m, spec)
     text = Display.signalText,
     visible = Display.isNotMismatch,
   })
-  if showDetail then
-    Components.label(panel, {
-      x = right - signalW - m.pad * 2 - detailW,
-      y = y + drop,
-      w = detailW,
-      align = RIGHT,
-      font = SMLSIZE,
-      color = COLOR_THEME_SECONDARY1,
-      text = Display.rfDetailText,
-      -- Hidden with the other readings while the hero carries a status, which
-      -- is the one case a long hero string reaches this far across the row.
-      visible = Display.isNotMismatch,
-    })
-  end
 
   if barH > 0 then
     Components.bar(panel, inner, vpad + spec.lqH + air, {

@@ -31,7 +31,7 @@ WidgetUI.breakpoints = {
 }
 
 WidgetUI.fonts = {
-  compact = { hero = BOLD },
+  compact = { hero = SMLSIZE },
   third = { hero = BOLD, detail = SMLSIZE },
   full = { hero = MIDSIZE, heroStatus = BOLD, detail = SMLSIZE },
 }
@@ -46,7 +46,7 @@ local TopBarUI = loadScript("/WIDGETS/ELRSTelemetry/ui/topbar.lua")({ Display = 
 --- is shared, and it sheds cells and bar height as the zone shrinks.
 function WidgetUI.buildCompact(w, h, opa)
   local m = measured()
-  Components.compactTier(w, h, opa, m, { lqFont = WidgetUI.fonts.compact.hero, lqH = m.bold })
+  Components.compactTier(w, h, opa, m, { lqFont = WidgetUI.fonts.compact.hero, lqH = m.sml })
 end
 
 --- 1/3: the strip, LQ beside the RSSI pair, then the headroom bar.
