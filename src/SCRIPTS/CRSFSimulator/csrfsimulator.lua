@@ -590,13 +590,18 @@ local txDevice = {
       units = "",
     },
     { id = 12, parent = 10, type = CRSF.UINT8, name = "Channel", value = 1, min = 1, max = 8, units = "" },
+    -- Power level 2, pit mode off: a VTX whose power ExpressLRS is managing.
+    -- At "-" the folder name drops the power and pit mode segments entirely and
+    -- the Pitmode field is hidden, so nothing downstream has a power level or a
+    -- pit state to render -- which makes it the wrong default for a mock whose
+    -- job is to exercise the display.
     {
       id = 13,
       parent = 10,
       type = CRSF.TEXT_SELECTION,
       name = "Pwr Lvl",
       options = "-;1;2;3;4;5;6;7;8",
-      value = 0,
+      value = 2,
       units = "",
     },
     {
