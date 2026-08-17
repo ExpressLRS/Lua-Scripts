@@ -20,10 +20,10 @@ WidgetUI.breakpoints = {
   quarterH = 100,
   thirdH = 140,
   halfH = 210,
-  -- From here up a 1/3 zone spans the screen rather than half of it: the whole
-  -- cheatsheet goes on one row, and the band steps up to the size that width
+  -- From here up a zone spans the screen rather than half of it: at 1/3 the whole
+  -- cheatsheet goes on one row and the band steps up to the size that width
   -- affords. 320px is all there is, so the cheatsheet cannot follow it.
-  thirdWideW = 240,
+  wideW = 240,
 }
 
 WidgetUI.fonts = {
@@ -180,7 +180,7 @@ end
 --- caption and its value. The line that buys puts the whole cheatsheet on one
 --- row where the zone spans the screen; a half-width zone keeps the two rows.
 function WidgetUI.buildThird(w, h, opa)
-  local wide = w >= WidgetUI.breakpoints.thirdWideW
+  local wide = w >= WidgetUI.breakpoints.wideW
   local f = wide and WidgetUI.fonts.thirdWide or WidgetUI.fonts.third
   local extras = {
     {

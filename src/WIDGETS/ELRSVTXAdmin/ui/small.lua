@@ -18,9 +18,10 @@ WidgetUI.breakpoints = {
   quarterH = 54,
   thirdH = 76,
   halfH = 100,
-  -- From here up a 1/3 zone spans the screen rather than half of it: the whole
-  -- cheatsheet goes on one row, and the type steps up as far as 320x240 allows.
-  thirdWideW = 240,
+  -- From here up a zone spans the screen rather than half of it: at 1/3 the whole
+  -- cheatsheet goes on one row and the type steps up as far as 320x240 allows,
+  -- and pit mode is said in full.
+  wideW = 240,
 }
 
 WidgetUI.fonts = {
@@ -138,42 +139,10 @@ end
 --- A half-width zone keeps the two rows, the terse detail forms and the smaller
 --- cheatsheet.
 function WidgetUI.buildThird(w, h, opa)
-  local wide = w >= WidgetUI.breakpoints.thirdWideW
+  local wide = w >= WidgetUI.breakpoints.wideW
   local f = wide and WidgetUI.fonts.thirdWide or WidgetUI.fonts.third
-  local extras
-  if wide then
-    extras = {
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = COLOR_THEME_SECONDARY1,
-        text = VTXDisplay.detailLine,
-        visible = VTXDisplay.showChannel,
-      },
-    }
-  else
-    extras = {
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = COLOR_THEME_SECONDARY1,
-        text = VTXDisplay.powerShort,
-        visible = VTXDisplay.showChannel,
-      },
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = VTXDisplay.pitColor,
-        text = VTXDisplay.pitShort,
-        visible = VTXDisplay.showChannel,
-      },
-    }
-  end
   local rows = {
-    VTXDisplay.buildHeadline(w, f.status, extras),
+    VTXDisplay.buildHeadline(w, f.status, VTXDisplay.buildDetailExtras(wide)),
     {
       type = lvgl.LABEL,
       align = LEFT,

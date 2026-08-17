@@ -22,10 +22,10 @@ WidgetUI.breakpoints = {
   quarterH = 62,
   thirdH = 118,
   halfH = 147,
-  -- From here up a 1/3 zone spans the screen rather than half of it: the whole
-  -- cheatsheet goes on one row, and the type steps up to the size that width
-  -- affords.
-  thirdWideW = 340,
+  -- From here up a zone spans the screen rather than half of it. What it buys
+  -- differs by tier: the whole cheatsheet on one row and a step up in type at
+  -- 1/3, pit mode said in full at 1/6.
+  wideW = 340,
 }
 
 WidgetUI.fonts = {
@@ -47,17 +47,43 @@ local TopBarUI = loadScript("/WIDGETS/ELRSVTXAdmin/ui/topbar.lua")({
   VTXDisplay = VTXDisplay,
 })
 
---- 1/6: band + detail on one row, with the cheatsheet inline where the zone is
---- wide enough to carry all three.
---- A narrow zone stacks the cheatsheet under them instead, when the height and
---- the six columns both measure. It fits at all only on the container's padding:
---- at this tier PAD_SMALL top and bottom is the whole difference between two rows
---- and one. So the vertical padding gives and the left edge keeps it -- that edge
---- is what a widget in the zone above lines its own text up against.
+--- 1/6: the headline over the cheatsheet, wherever the zone holds two rows.
+--- Two rows are what make room for the name: with the whole cheatsheet on the row
+--- below, the one above is left to the name, the reading and the detail, and none
+--- of the three has to give. That is worth having at any width -- a full-width
+--- zone can fit all four inline, but then the widget is a row of readings with
+--- nothing saying whose they are, where every other tier says "VTX Admin".
+--- It fits at all only on the container's padding: at this tier PAD_SMALL top and
+--- bottom is the whole difference between two rows and one. So the vertical
+--- padding gives and the left edge keeps it -- that edge is what a widget in the
+--- zone above lines its own text up against.
+--- A zone too short for two rows, or too narrow to carry six cells on one, falls
+--- back to a single inline row, which has no width to spare for the name.
 --- Fixed-width band column prevents layout jumping when values change.
 --- Status text (loading/error/off) uses unconstrained label for narrow columns.
 function WidgetUI.buildSixth(w, h, opa)
-  local wide = w > 200
+  local bp = WidgetUI.breakpoints
+  local cheatsheet = nil
+  if h >= bp.sixthStackH and w >= bp.sixthStackW then
+    cheatsheet = VTXDisplay.buildCheatsheet()
+  end
+  if cheatsheet then
+    local extras = VTXDisplay.buildDetailExtras(w >= bp.wideW)
+    extras[#extras + 1] = {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = BOLD,
+      color = VTXDisplay.mainColor,
+      text = VTXDisplay.statusText,
+      visible = VTXDisplay.showStatus,
+    }
+    WidgetLayout.column(w, h, opa, {
+      VTXDisplay.buildHeadline(w, WidgetUI.fonts.sixth.status, extras),
+      cheatsheet,
+    }, { left = lvgl.PAD_SMALL, right = lvgl.PAD_SMALL, top = lvgl.PAD_TINY, bottom = lvgl.PAD_TINY })
+    return
+  end
+
   local c1w = math.floor(w * 0.22)
   local columns = {
     {
@@ -82,58 +108,14 @@ function WidgetUI.buildSixth(w, h, opa)
       text = VTXDisplay.detailLine,
     },
   }
-  if wide then
+  if w >= bp.wideW then
     local labels = VTXDisplay.build6posLabels()
     for _, lbl in ipairs(labels) do
       columns[#columns + 1] = lbl
     end
-    WidgetLayout.row(w, h, opa, columns)
-    return
   end
 
-  local bp = WidgetUI.breakpoints
-  local cheatsheet = nil
-  if h >= bp.sixthStackH and w >= bp.sixthStackW then
-    cheatsheet = VTXDisplay.buildCheatsheet()
-  end
-  if cheatsheet == nil then
-    WidgetLayout.row(w, h, opa, columns)
-    return
-  end
-
-  -- Once the cheatsheet moves off the row there is width for the name, so the
-  -- widget gets to say what it is. Power and pit mode pay for it in their terse
-  -- forms -- "P2 Pit" rather than "P2 Pit Mode Off" -- because the name and the
-  -- reading come first and this row cannot hold all three in full.
-  WidgetLayout.column(w, h, opa, {
-    VTXDisplay.buildHeadline(w, WidgetUI.fonts.sixth.status, {
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = COLOR_THEME_SECONDARY1,
-        text = VTXDisplay.powerShort,
-        visible = VTXDisplay.showChannel,
-      },
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = VTXDisplay.pitColor,
-        text = VTXDisplay.pitShort,
-        visible = VTXDisplay.showChannel,
-      },
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = BOLD,
-        color = VTXDisplay.mainColor,
-        text = VTXDisplay.statusText,
-        visible = VTXDisplay.showStatus,
-      },
-    }),
-    cheatsheet,
-  }, { left = lvgl.PAD_SMALL, right = lvgl.PAD_SMALL, top = lvgl.PAD_TINY, bottom = lvgl.PAD_TINY })
+  WidgetLayout.row(w, h, opa, columns)
 end
 
 --- 1/4: two rows. Row 1: the headline, power, and pit mode where it fits.
@@ -191,42 +173,10 @@ end
 --- A half-width zone has neither the width for six columns nor for the detail
 --- line in full, so it keeps the two rows, the terse forms and the smaller type.
 function WidgetUI.buildThird(w, h, opa)
-  local wide = w >= WidgetUI.breakpoints.thirdWideW
+  local wide = w >= WidgetUI.breakpoints.wideW
   local f = wide and WidgetUI.fonts.thirdWide or WidgetUI.fonts.third
-  local extras
-  if wide then
-    extras = {
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = COLOR_THEME_SECONDARY1,
-        text = VTXDisplay.detailLine,
-        visible = VTXDisplay.showChannel,
-      },
-    }
-  else
-    extras = {
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = COLOR_THEME_SECONDARY1,
-        text = VTXDisplay.powerShort,
-        visible = VTXDisplay.showChannel,
-      },
-      {
-        type = lvgl.LABEL,
-        align = LEFT,
-        font = SMLSIZE,
-        color = VTXDisplay.pitColor,
-        text = VTXDisplay.pitShort,
-        visible = VTXDisplay.showChannel,
-      },
-    }
-  end
   local rows = {
-    VTXDisplay.buildHeadline(w, f.status, extras),
+    VTXDisplay.buildHeadline(w, f.status, VTXDisplay.buildDetailExtras(wide)),
     -- The status keeps a row of its own here, unlike at 1/4. This tier has the
     -- height for it, and a hidden flex child costs nothing while the VTX is
     -- tuned.

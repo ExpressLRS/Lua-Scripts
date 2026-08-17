@@ -285,6 +285,36 @@ function VTXDisplay.buildHeadline(w, font, extras)
   }
 end
 
+--- The power and pit-mode labels that ride a headline row, in the form the width
+--- affords: pit mode said in full where there is room for it, and terse -- "Pit"
+--- rather than "Pit Mode Off" -- where the name and the reading come first and
+--- the row cannot hold all three whole.
+--- Two labels either way, because pit mode carries its own colour: a confirmed
+--- pit mode is the one thing on this row worth going red, and a single label
+--- holding both readings could only be one colour.
+--- A caller with no spare row for the status appends its own status label after
+--- these.
+function VTXDisplay.buildDetailExtras(wide)
+  return {
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = VTXDisplay.powerShort,
+      visible = VTXDisplay.showChannel,
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = SMLSIZE,
+      color = VTXDisplay.pitColor,
+      text = wide and VTXDisplay.pitText or VTXDisplay.pitShort,
+      visible = VTXDisplay.showChannel,
+    },
+  }
+end
+
 --- The rows 1/2 and 1/1 share: the name, the band and channel as a hero on its
 --- own line, and the detail line. The caller appends its cheatsheet rows.
 --- detailText overrides the detail formatter, for a screen too narrow for the
