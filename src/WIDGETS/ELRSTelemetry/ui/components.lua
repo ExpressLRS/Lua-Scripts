@@ -196,6 +196,10 @@ end
 function Components.bar(dst, rect, y, spec)
   local h = spec.h
   local w = rect.w
+  -- Pill ends. rounded is a build-time corner radius, which is fine here: the
+  -- bar's height is fixed per build, and LVGL clamps the radius itself when
+  -- the fill's live width drops below the pill's diameter.
+  local r = math.floor(h / 2)
   dst[#dst + 1] = {
     type = lvgl.RECTANGLE,
     x = rect.x,
@@ -210,6 +214,7 @@ function Components.bar(dst, rect, y, spec)
     color = COLOR_THEME_DISABLED,
     opacity = TRACK_OPACITY,
     filled = true,
+    rounded = r,
   }
   dst[#dst + 1] = {
     type = lvgl.RECTANGLE,
@@ -219,6 +224,7 @@ function Components.bar(dst, rect, y, spec)
     h = h,
     color = spec.color,
     filled = true,
+    rounded = r,
     -- Size closures go through luaL_checkunsigned, so this must never return
     -- a negative, and never 0 either: 0 is a literal zero-pixel object rather
     -- than "no width". An empty bar hides via spec.visible instead.
@@ -866,7 +872,10 @@ function Components.fullTier(w, h, opa, m, spec)
     + m.sml * #rows
     + (wide and 0 or m.sml + m.gap) -- narrow puts TX POWER on its own row
   local slack = f.h - fixed
-  local barH = math.max(4, math.min(math.floor(slack * 0.3), 26))
+  -- A gentle fraction of the slack: the tier also serves zones barely over
+  -- the 1/2 breakpoint, where a generous cut of a small slack makes the bars
+  -- thicker than the rows they sit under. The tall 1/1 still reaches the cap.
+  local barH = math.max(4, math.min(math.floor(slack * 0.15), 18))
   local air = math.max(m.gap, math.floor((slack - barH * 2) / AIR_GAPS))
 
   local root = {}
@@ -934,7 +943,7 @@ function Components.halfTier(w, h, opa, m, spec)
   end
 
   local slack = f.h - fixed
-  local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.35), 20))
+  local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.28), 14))
   local air = math.max(0, math.floor((slack - barH * 2) / AIR_GAPS))
 
   local root = {}
@@ -980,7 +989,7 @@ function Components.thirdTier(w, h, opa, m, spec)
     + (m.sml + 4) -- status strip
     + spec.lqH
   local slack = f.h - fixed
-  local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.5), 14))
+  local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.45), 12))
   local air = math.max(0, math.floor((slack - barH) / AIR_GAPS))
 
   local root = {}
@@ -1027,12 +1036,13 @@ end
 --- with it. Two rows cannot hold a strip and a bar, and the bar is what this
 --- widget is: below the strip the choice is between a row of numbers any
 --- telemetry screen could show and the one instrument only this widget has.
---- The RSSI pair keeps the left edge because the bar grows from there and plots
---- exactly that reading. LQ goes to the right, so it reads as the number it is
---- rather than as the bar's label.
+--- LQ leads beside the name and the dBm pair takes the right margin -- the
+--- same ends every taller tier gives them, so resizing the widget never
+--- swaps the side a reading lives on.
 --- Then the packet rate and power come back as one cell where the width allows,
---- and the name after them -- readings before identity, since the mode and the
---- power are things only this row can tell you at this size.
+--- and the name leads the row from beside the LED, as it does on the status
+--- strip -- a mark trailing at the end of the line reads as an afterthought,
+--- and a row that ends on a reading ends on something worth reading.
 --- The LED keeps its lane, so a link that is down still says so on the tier
 --- with no room to say it in words, and the hero label falls back to the status
 --- text: there is no strip here to carry a banner.
@@ -1065,7 +1075,10 @@ function Components.compactTier(w, h, opa, m, spec)
   -- With no bar the row has the panel to itself, so it centres; with one it
   -- keeps the top and the bar takes the slack.
   local y = vpad + (barH > 0 and 0 or math.floor(air / 2))
-  local textX = Components.ledLane(panel, inner, y, m)
+  -- The LED sits beside the dropped small text, not beside the hero, so it
+  -- centres on the dropped line: undropped it rides high of the reading by
+  -- the whole baseline offset, which at this size is plainly visible.
+  local textX = Components.ledLane(panel, inner, y + drop, m)
   local right = inner.x + inner.w
 
   local detailW = Components.textWidth("K1000Full 2000mW", SMLSIZE)
@@ -1081,19 +1094,45 @@ function Components.compactTier(w, h, opa, m, spec)
   local brand = Components.brandText(avail)
 
   if brand then
-    local brandW = Components.textWidth(brand, SMLSIZE)
+    -- The name leads the row from beside the LED, the same grammar as the
+    -- status strip -- so the line ends on a reading, not on the mark. The
+    -- readings shift right by the name's width and the gap is the strip's
+    -- name gap, wide enough that name and reading do not run together.
     Components.label(panel, {
-      x = right - brandW,
+      x = textX,
       y = y + drop,
       font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
       text = brand,
     })
-    right = right - brandW - m.pad * 2
+    textX = textX + Components.textWidth(brand, SMLSIZE) + m.pad * 2
   end
+  Components.label(panel, {
+    x = textX,
+    y = y,
+    font = spec.lqFont,
+    color = Display.heroColor,
+    -- The status when there is one: no strip means no banner, so this label is
+    -- the only thing that can say the link is down or the model is wrong. Left
+    -- aligned, a long status grows rightward across the row the hidden
+    -- readings have just emptied.
+    text = Display.heroText,
+  })
+
+  local signalW = Components.textWidth("-105 / -105 dBm", SMLSIZE)
+  Components.label(panel, {
+    x = right - signalW,
+    y = y + drop,
+    w = signalW,
+    align = RIGHT,
+    font = SMLSIZE,
+    color = Display.detailColor,
+    text = Display.signalText,
+    visible = Display.isNotMismatch,
+  })
   if showDetail then
     Components.label(panel, {
-      x = right - detailW,
+      x = right - signalW - m.pad * 2 - detailW,
       y = y + drop,
       w = detailW,
       align = RIGHT,
@@ -1104,30 +1143,7 @@ function Components.compactTier(w, h, opa, m, spec)
       -- is the one case a long hero string reaches this far across the row.
       visible = Display.isNotMismatch,
     })
-    right = right - detailW - m.pad
   end
-
-  Components.label(panel, {
-    x = textX,
-    y = y,
-    w = right - textX,
-    align = RIGHT,
-    font = spec.lqFont,
-    color = Display.heroColor,
-    -- The status when there is one: no strip means no banner, so this label is
-    -- the only thing that can say the link is down or the model is wrong. It is
-    -- right-aligned, so a long status grows leftward across the row it has just
-    -- emptied rather than into the mark at its end.
-    text = Display.heroText,
-  })
-  Components.label(panel, {
-    x = textX,
-    y = y + drop,
-    font = SMLSIZE,
-    color = Display.detailColor,
-    text = Display.signalText,
-    visible = Display.isNotMismatch,
-  })
 
   if barH > 0 then
     Components.bar(panel, inner, vpad + spec.lqH + air, {
