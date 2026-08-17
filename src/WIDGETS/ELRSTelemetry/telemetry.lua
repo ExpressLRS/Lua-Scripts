@@ -17,8 +17,8 @@
 --    for the instances that did not sample this tick would leave those  --
 --    queues to fill and overflow.                                       --
 -- 2. update() samples once per tick however many instances call it.     --
---    Without that, the range smoother would step once per instance per  --
---    frame and settle N times faster on a screen with N widgets.        --
+--    Without that, the headroom smoother would step once per instance   --
+--    per frame and settle N times faster on a screen with N widgets.    --
 -- 3. The frame handlers stay pure assignment. Every instance is         --
 --    delivered its own copy of each frame, so on a radio this singleton --
 --    decodes the same frame N times; a counter here would be N times    --
@@ -43,8 +43,10 @@ local Telemetry = {}
 -- never changes, so consumers may cache a reference.
 Telemetry.link = {}
 
--- Smoothed range percentage, recomputed once per tick from the snapshot.
-Telemetry.rangePct = 0
+-- Smoothed signal headroom as a percentage of the current RF mode's usable
+-- range, or nil while that range is unknown. Recomputed once per tick.
+---@type number?
+Telemetry.headroomPct = nil
 
 -- Detected battery cell count, or nil while no plausible pack voltage has
 -- been seen. Locks on once the same count survives a few readings.
@@ -73,9 +75,9 @@ Telemetry.modelId = nil
 Telemetry._cellCntCnt = nil
 Telemetry._cellLastV = nil
 
--- Unsmoothed range feed for rangePct.
+-- Running smoother state for headroomPct.
 ---@type number?
-Telemetry._smoothRng = nil
+Telemetry._smoothHead = nil
 
 -- Device info cache (populated by the DEVICE_INFO handler): name, isElrs.
 -- Neither is displayed: name is the "already answered" latch that stops the
@@ -123,10 +125,48 @@ function Telemetry.isMismatch()
   return crsf.hasTelemetry and Telemetry.modelMismatch
 end
 
+-- The link's state as one value, worst first. The view turns it into words in
+-- one place and into a colour in another; both index this, so the status line
+-- and the status LED cannot end up disagreeing about what the link is doing.
+Telemetry.STATUS = {
+  NO_MODULE = 1,
+  NO_TELEMETRY = 2,
+  MISMATCH = 3,
+  OK = 4,
+}
+
+--- Where the link currently sits on the STATUS ladder.
+function Telemetry.statusLevel()
+  local STATUS = Telemetry.STATUS
+  if not Telemetry.hasModule() then
+    return STATUS.NO_MODULE
+  end
+  if not Telemetry.isConnected() then
+    return STATUS.NO_TELEMETRY
+  end
+  if Telemetry.modelMismatch then
+    return STATUS.MISMATCH
+  end
+  return STATUS.OK
+end
+
 --- RSSI of the antenna currently in use, or nil while unknown.
 function Telemetry.activeRssi()
   local link = Telemetry.link
   return (link.ant == 1) and link.rssi2 or link.rssi1
+end
+
+--- dB the active antenna sits above the RF mode's rated sensitivity floor, or
+--- nil while either end is unknown. This is the number the headroom bar draws
+--- and the full-screen page prints: RSSI on its own says nothing until you
+--- know what the receiver can still hear at.
+function Telemetry.marginDb()
+  local rssi = Telemetry.activeRssi()
+  local sens = Telemetry.link.sens
+  if rssi == nil or sens == nil then
+    return nil
+  end
+  return rssi - sens
 end
 
 --- Whether the RX reports a second antenna.
@@ -179,27 +219,43 @@ local function checkCellCount(v)
   end
 end
 
---- Recompute the smoothed range percentage from the snapshot.
-local function updateRangePct()
+-- Above this the receiver is saturated and more signal buys nothing, so it is
+-- where the headroom scale tops out rather than the strongest RSSI seen.
+-- Public because it is the headroom bar's right endpoint, and a layout file
+-- printing its own -50 would be a second copy of the same decision.
+Telemetry.RSSI_CEILING = -50
+local RSSI_CEILING = Telemetry.RSSI_CEILING
+
+--- Recompute the smoothed signal headroom from the snapshot.
+-- 0% puts the active antenna exactly on the RF mode's rated floor and 100%
+-- puts it at the ceiling, so the scale recalibrates with the packet rate: the
+-- same -80 dBm is comfortable at 25Hz and marginal at F1000.
+-- Unknown at either end means there is no scale to place RSSI on, and a bar
+-- drawn against a guessed floor would be worse than no bar.
+local function updateHeadroom()
   local rssi = Telemetry.activeRssi()
-  if rssi == nil then
-    Telemetry.rangePct = 0
+  local sens = Telemetry.link.sens
+  if rssi == nil or sens == nil then
+    Telemetry.headroomPct = nil
+    Telemetry._smoothHead = nil
     return
   end
-  local rfmd = Telemetry.link.rfmd
-  local minrssi = (rfmd and RfModes.floor(rfmd)) or -128
-  if rssi > -50 then
-    rssi = -50
+  if rssi > RSSI_CEILING then
+    rssi = RSSI_CEILING
+  elseif rssi < sens then
+    -- The floor is a rating, not a wall: a receiver still reports RSSI below
+    -- the figure it is rated to. Clamping keeps the percentage on scale.
+    rssi = sens
   end
-  local pct = math.floor(100 * (rssi + 50) / (minrssi + 50) + 0.5)
-  local smooth = Telemetry._smoothRng or pct
+  local pct = math.floor(100 * (rssi - sens) / (RSSI_CEILING - sens) + 0.5)
+  local smooth = Telemetry._smoothHead or pct
   if pct > smooth then
     pct = smooth + ((pct > smooth + 8) and 4 or 1)
   elseif pct < smooth then
     pct = smooth - ((pct < smooth - 8) and 4 or 1)
   end
-  Telemetry._smoothRng = pct
-  Telemetry.rangePct = pct
+  Telemetry._smoothHead = pct
+  Telemetry.headroomPct = pct
 end
 
 --- Latch the last known GPS position, ignoring the "no fix" readings.
@@ -215,11 +271,11 @@ end
 -- ============================================================================
 
 --- Clear the state that belongs to one connection, on the falling edge.
---- Cell count and range smoothing re-detect on the next battery instead of
+--- Cell count and headroom smoothing re-detect on the next battery instead of
 --- latching forever. gps is deliberately kept.
 local function resetConnection()
-  Telemetry._smoothRng = nil
-  Telemetry.rangePct = 0
+  Telemetry._smoothHead = nil
+  Telemetry.headroomPct = nil
   Telemetry.cellCnt = nil
   Telemetry._cellCntCnt = nil
   Telemetry._cellLastV = nil
@@ -355,12 +411,17 @@ function Telemetry.update()
   link.rssi2 = crsf.getSensorValue("2RSS")
   link.rqly = crsf.getSensorValue("RQly")
   link.ant = crsf.getSensorValue("ANT")
+  link.tqly = crsf.getSensorValue("TQly")
+  link.trss = crsf.getSensorValue("TRSS")
   link.vbat = crsf.getSensorValue("RxBt")
   link.curr = crsf.getSensorValue("Curr")
   link.fm = crsf.getSensorValue("FM")
   link.sats = crsf.getSensorValue("Sats")
   link.gspd = crsf.getSensorValue("GSpd")
   link.alt = crsf.getSensorValue("Alt")
+  -- Resolved here rather than at every read: the floor only moves when the
+  -- packet rate does, and the view asks for it several times a frame.
+  link.sens = link.rfmd and RfModes.floor(link.rfmd)
 
   local connected = crsf.hasTelemetry
   if connected ~= Telemetry._wasConnected then
@@ -373,7 +434,7 @@ function Telemetry.update()
 
   if connected then
     updateGps()
-    updateRangePct()
+    updateHeadroom()
     if link.vbat then
       checkCellCount(link.vbat)
     end

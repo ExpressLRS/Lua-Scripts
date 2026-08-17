@@ -16,7 +16,11 @@ local VTXAdmin, PresetsStorage = ...
 
 local WidgetLayout = {}
 
-function WidgetLayout.column(w, h, opa, children)
+--- pad overrides the container's border padding, for a tier where the default
+--- costs more height than it has. Pass a table to keep the horizontal padding
+--- while trimming the vertical: the left edge is what a widget in the zone
+--- above or beside lines its own text up against, so it is not the one to give.
+function WidgetLayout.column(w, h, opa, children, pad)
   lvgl.build({
     {
       type = lvgl.RECTANGLE,
@@ -37,7 +41,7 @@ function WidgetLayout.column(w, h, opa, children)
       align = LEFT,
       flexFlow = lvgl.FLOW_COLUMN,
       flexPad = 0,
-      borderPad = lvgl.PAD_SMALL,
+      borderPad = pad or lvgl.PAD_SMALL,
       children = children,
     },
   })
@@ -173,6 +177,15 @@ function VTXDisplay.detailLong()
   return table.concat({ VTXDisplay.powerLong(), "  ", VTXDisplay.pitText() })
 end
 
+--- Whether detailLong() has anything to say. On the tiers that give it a column
+--- row of its own an empty label still costs a full line, and that line is the
+--- gap that opens between the band and the cheatsheet on a VTX reporting no
+--- power. A flex column drops hidden children rather than reserving their space,
+--- so this closes the gap instead of merely blanking it.
+function VTXDisplay.hasDetail()
+  return VTXAdmin.isDisabled() or VTXAdmin.hasPower()
+end
+
 function VTXDisplay.mainColor()
   if VTXAdmin.state.pitmode then
     return RED
@@ -228,6 +241,118 @@ function VTXDisplay.buildCheatsheet(font)
     return nil
   end
   return cheatsheetRow(labels)
+end
+
+--- The headline row: the widget's name, then the band and channel, on one line at
+--- one size. For the tiers with no row to spare for a title of its own.
+--- Both at one size on purpose. The name is a caption in the muted theme colour
+--- and the reading is the primary, which is what lets them share a line without
+--- competing -- where two type sizes in one breath read as two importances, and
+--- a name shrunk beside its own value reads as an afterthought.
+--- extras are trailing labels, for a tier with nowhere else to put them.
+function VTXDisplay.buildHeadline(w, font, extras)
+  local children = {
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = font,
+      color = COLOR_THEME_SECONDARY1,
+      text = "VTX Admin",
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = font,
+      color = VTXDisplay.mainColor,
+      text = VTXDisplay.bandChannel,
+      visible = VTXDisplay.showChannel,
+    },
+  }
+  for i = 1, extras and #extras or 0 do
+    children[#children + 1] = extras[i]
+  end
+  return {
+    type = lvgl.BOX,
+    w = w,
+    align = LEFT + VCENTER,
+    flexFlow = lvgl.FLOW_ROW,
+    -- Wider than the tier's other gaps. At one size and with only colour telling
+    -- the caption from the reading, PAD_TINY leaves "VTX Admin" and "R1" reading
+    -- as one run-together word.
+    flexPad = lvgl.PAD_MEDIUM,
+    borderPad = 0,
+    children = children,
+  }
+end
+
+--- The power and pit-mode labels that ride a headline row, in the form the width
+--- affords: pit mode said in full where there is room for it, and terse -- "Pit"
+--- rather than "Pit Mode Off" -- where the name and the reading come first and
+--- the row cannot hold all three whole.
+--- Two labels either way, because pit mode carries its own colour: a confirmed
+--- pit mode is the one thing on this row worth going red, and a single label
+--- holding both readings could only be one colour.
+--- A caller with no spare row for the status appends its own status label after
+--- these.
+function VTXDisplay.buildDetailExtras(wide)
+  return {
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = VTXDisplay.powerShort,
+      visible = VTXDisplay.showChannel,
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = SMLSIZE,
+      color = VTXDisplay.pitColor,
+      text = wide and VTXDisplay.pitText or VTXDisplay.pitShort,
+      visible = VTXDisplay.showChannel,
+    },
+  }
+end
+
+--- The rows 1/2 and 1/1 share: the name, the band and channel as a hero on its
+--- own line, and the detail line. The caller appends its cheatsheet rows.
+--- detailText overrides the detail formatter, for a screen too narrow for the
+--- full one. Its emptiness follows hasDetail either way, since every form of the
+--- line falls silent on the same two conditions.
+function VTXDisplay.buildHeroRows(fonts, detailText)
+  return {
+    {
+      type = lvgl.LABEL,
+      font = BOLD,
+      color = COLOR_THEME_SECONDARY1,
+      text = "VTX Admin",
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = BOLD,
+      color = VTXDisplay.mainColor,
+      text = VTXDisplay.statusText,
+      visible = VTXDisplay.showStatus,
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = fonts.hero,
+      color = VTXDisplay.mainColor,
+      text = VTXDisplay.bandChannel,
+      visible = VTXDisplay.showChannel,
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = fonts.detail,
+      color = COLOR_THEME_SECONDARY1,
+      text = detailText or VTXDisplay.detailLong,
+      visible = VTXDisplay.hasDetail,
+    },
+  }
 end
 
 --- Two rows, 1-3 over 4-6. Fits narrow zones and reads larger where height allows.

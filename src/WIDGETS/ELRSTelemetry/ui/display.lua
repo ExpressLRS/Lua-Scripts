@@ -1,7 +1,7 @@
 ---------------------------------------------------------------------------
 -- ELRS Telemetry Widget - Display Components                            --
 -- Loaded via loadScript() from ELRSTelemetry/loadable.lua with          --
--- (Telemetry); returns (Display, WidgetLayout).                         --
+-- (Telemetry); returns the Display table.                               --
 --                                                                       --
 -- Display is the read model the ui/ files consume: zero-argument        --
 -- formatters passed by reference as LVGL text/color callbacks, so they  --
@@ -18,66 +18,6 @@ local Telemetry = ...
 local Display = {}
 
 -- ============================================================================
--- WidgetLayout: minimized zone container builders
--- ============================================================================
-
-local WidgetLayout = {}
-
-function WidgetLayout.column(w, h, opa, children)
-  lvgl.build({
-    {
-      type = lvgl.RECTANGLE,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      color = COLOR_THEME_PRIMARY2,
-      opacity = opa,
-      filled = true,
-    },
-    {
-      type = lvgl.BOX,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      align = LEFT,
-      flexFlow = lvgl.FLOW_COLUMN,
-      flexPad = 0,
-      borderPad = lvgl.PAD_SMALL,
-      children = children,
-    },
-  })
-end
-
-function WidgetLayout.row(w, h, opa, children)
-  lvgl.build({
-    {
-      type = lvgl.RECTANGLE,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      color = COLOR_THEME_PRIMARY2,
-      opacity = opa,
-      filled = true,
-    },
-    {
-      type = lvgl.BOX,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      align = LEFT + VCENTER,
-      flexFlow = lvgl.FLOW_ROW,
-      flexPad = lvgl.PAD_TINY,
-      borderPad = lvgl.PAD_SMALL,
-      children = children,
-    },
-  })
-end
-
--- ============================================================================
 -- Link state, as the view asks about it
 -- ============================================================================
 
@@ -91,19 +31,34 @@ function Display.isMismatch()
   return Telemetry.isMismatch()
 end
 
+--- The inverse, for the strip elements a mismatch banner displaces. They take
+--- this rather than being left out, so the banner and the elements it hides
+--- occupy the same rect and nothing reflows.
+function Display.isNotMismatch()
+  return not Telemetry.isMismatch()
+end
+
+--- Whether the RX reports a second antenna, so a layout can hide the cell
+--- that would otherwise imply a path this receiver does not have.
+function Display.hasDiversity()
+  return Telemetry.hasDiversity()
+end
+
+-- One word per rung of Telemetry.STATUS. Title case throughout, because
+-- pageSubtitle() puts these under the full-screen page's own title, where
+-- shouting would read wrong. The tiers that want a caps banner spell it out
+-- themselves as a fixed label.
+local STATUS_TEXT = {
+  [Telemetry.STATUS.NO_MODULE] = "No CRSF module",
+  [Telemetry.STATUS.NO_TELEMETRY] = "No telemetry",
+  [Telemetry.STATUS.MISMATCH] = "Model Mismatch",
+}
+
 --- Short status text when not operational or a warning is active.
---- Returns nil when connected with no warnings.
+--- Returns nil when connected with no warnings, which is the OK rung having
+--- no entry above rather than a case handled here.
 function Display.statusText()
-  if not Telemetry.hasModule() then
-    return "No CRSF module"
-  end
-  if not Telemetry.isConnected() then
-    return "No telemetry"
-  end
-  if Telemetry.modelMismatch then
-    return "Model Mismatch"
-  end
-  return nil
+  return STATUS_TEXT[Telemetry.statusLevel()]
 end
 
 --- Full-screen page subtitle: the same ladder, with a resting state.
@@ -121,6 +76,95 @@ function Display.lqValueText()
     return "--"
   end
   return table.concat({ tostring(Telemetry.link.rqly or 0), "%" })
+end
+
+--- Uplink LQ as a bar fraction, 0-100.
+function Display.lqPct()
+  if not Telemetry.isConnected() then
+    return 0
+  end
+  return Telemetry.link.rqly or 0
+end
+
+--- Signal headroom as a bar fraction, 0-100. Zero rather than nil so a size
+--- closure never has to think about it; the bar hides on hasHeadroom().
+function Display.headroomPct()
+  return Telemetry.headroomPct or 0
+end
+
+--- Whether there is a rated floor to draw a headroom scale against.
+function Display.hasHeadroom()
+  return Telemetry.headroomPct ~= nil
+end
+
+--- Downlink link quality, e.g. "100 %". Captioned TQly by its callers, which
+--- is the name EdgeTX puts in the model's telemetry list.
+function Display.tqlyText()
+  local tqly = Telemetry.link.tqly
+  if not Telemetry.isConnected() or tqly == nil then
+    return "--"
+  end
+  return table.concat({ tostring(tqly), " %" })
+end
+
+--- Downlink RSSI, e.g. "-95 dBm". Captioned TRSS by its callers.
+--- The unit is not optional: TQly sits beside this on the same row in
+--- percent, and a bare -95 next to a percentage invites reading it as one.
+function Display.trssText()
+  local trss = Telemetry.link.trss
+  if not Telemetry.isConnected() or trss == nil then
+    return "--"
+  end
+  return table.concat({ tostring(trss), " dBm" })
+end
+
+--- The rated floor on its own, e.g. "-108", for the headroom bar's left
+--- endpoint. Empty when there is no floor, which is also when the bar hides.
+function Display.sensText()
+  local sens = Telemetry.link.sens
+  if sens == nil then
+    return ""
+  end
+  return tostring(sens)
+end
+
+--- The headroom bar's right endpoint, the RSSI above which more signal buys
+--- nothing. A property of the scale, so it comes from the state, not a literal
+--- in a layout file.
+function Display.ceilingText()
+  return tostring(Telemetry.RSSI_CEILING)
+end
+
+--- TX power on its own, e.g. "100 mW", or "--" while unknown.
+function Display.powerText()
+  local tpwr = Telemetry.link.tpwr
+  if tpwr == nil then
+    return "--"
+  end
+  return table.concat({ tostring(tpwr), " mW" })
+end
+
+--- Per-cell battery voltage, e.g. "4S 3.75 V", or "--".
+--- The pack total is a separate value so a row can carry one or both.
+function Display.cellText()
+  local vbat = Telemetry.link.vbat
+  if vbat == nil or vbat <= 0 then
+    return "--"
+  end
+  local cells = Telemetry.cellCnt
+  if cells == nil then
+    return "--"
+  end
+  return string.format("%dS %.2f V", cells, vbat / cells)
+end
+
+--- Pack voltage, e.g. "15.20 V", or "--".
+function Display.packText()
+  local vbat = Telemetry.link.vbat
+  if vbat == nil or vbat <= 0 then
+    return "--"
+  end
+  return string.format("%.2f V", vbat)
 end
 
 --- Link quality as the hero label spells it, e.g. "LQ 100%".
@@ -144,17 +188,23 @@ function Display.heroText()
   return Display.statusText() or Display.lqText()
 end
 
---- Range percentage + RSSI text, e.g. "Range 69% -90dBm".
+--- Active RSSI against the rate's rated floor, e.g. "-90 / -112 dBm".
+--- The pair is the point: RSSI alone says nothing until you know what the
+--- receiver can still hear at, and that figure moves with the packet rate.
+--- Drops to the reading alone when the rate is unrated.
 function Display.signalText()
   if not Telemetry.isConnected() then
     return ""
   end
-  local parts = { table.concat({ "Range ", tostring(Telemetry.rangePct), "%" }) }
-  local rssi = Display.rssiText()
-  if rssi ~= "" then
-    parts[#parts + 1] = rssi
+  local rssi = Telemetry.activeRssi()
+  if rssi == nil then
+    return ""
   end
-  return table.concat(parts, " ")
+  local sens = Telemetry.link.sens
+  if sens == nil then
+    return table.concat({ tostring(rssi), " dBm" })
+  end
+  return table.concat({ tostring(rssi), " / ", tostring(sens), " dBm" })
 end
 
 --- RF mode text, e.g. "250Hz". Narrow zones use this without the power suffix.
@@ -208,29 +258,188 @@ end
 --- Hero label colour: red only while a connected link reports a mismatch.
 function Display.heroColor()
   if Telemetry.isMismatch() then
-    return RED
+    return COLOR_THEME_WARNING
   end
   return COLOR_THEME_PRIMARY1
 end
 
---- Map range percentage to a warning colour.
-local function rangeColor(pct)
-  if pct > 90 then
-    return RED
-  end
-  if pct > 70 then
-    return ORANGE
-  end
-  return COLOR_THEME_SECONDARY1
+-- One health ramp, shared by the bars and the status LED, so a green bar and
+-- an amber dot can never describe the same link.
+--
+-- Theme colours rather than the GREEN/ORANGE/RED literals. Those are raw
+-- primaries -- GREEN is RGB(0,255,0) and RED is RGB(255,0,0)
+-- (colors.cpp:51-54) -- which is why a full-width LQ bar in GREEN was the
+-- loudest thing on the screen, and they stay that way whatever theme the
+-- pilot picked. The theme's own EDIT/ACTIVE/WARNING are the same three
+-- meanings in colours chosen to sit together, and they repaint with the theme.
+local HEALTH = { COLOR_THEME_EDIT, COLOR_THEME_ACTIVE, COLOR_THEME_WARNING }
+
+-- The same ramp for text. COLOR_THEME_ACTIVE is a bright yellow: fine as a
+-- bar fill, illegible as a word on the light themes' near-white panel, so
+-- warnings in text keep ORANGE.
+local HEALTH_TEXT = { COLOR_THEME_EDIT, ORANGE, COLOR_THEME_WARNING }
+
+-- Link margin in dB above the rated floor. At or below MARGIN_CRIT the
+-- receiver is at the edge of what it can hear; above MARGIN_WARN there is
+-- room left to fly into. Same thresholds the range percentage used, the right
+-- way up and in the unit the number is actually measured in.
+local MARGIN_CRIT = 10
+local MARGIN_WARN = 30
+
+--- Fill colour for a health level: 1 good, 2 warn, 3 critical.
+function Display.healthColor(level)
+  return HEALTH[level] or COLOR_THEME_DISABLED
 end
 
---- Detail line colour: warns as the range percentage climbs, neutral while
---- there is no link to judge.
-function Display.detailColor()
+--- The same, for text that has to stay readable on the panel.
+function Display.healthTextColor(level)
+  return HEALTH_TEXT[level] or COLOR_THEME_DISABLED
+end
+
+-- Uplink LQ. Below LQ_CRIT ExpressLRS is dropping enough packets to matter;
+-- at or above LQ_GOOD the link is doing what it is supposed to.
+local LQ_GOOD = 90
+local LQ_CRIT = 50
+
+--- Health level of the uplink LQ.
+function Display.lqLevel()
   if not Telemetry.isConnected() then
+    return 3
+  end
+  local lq = Telemetry.link.rqly or 0
+  if lq >= LQ_GOOD then
+    return 1
+  end
+  if lq >= LQ_CRIT then
+    return 2
+  end
+  return 3
+end
+
+--- Health level of the link margin, worst while there is no margin to judge.
+function Display.marginLevel()
+  local db = Telemetry.marginDb()
+  if db == nil then
+    return 3
+  end
+  if db > MARGIN_WARN then
+    return 1
+  end
+  if db > MARGIN_CRIT then
+    return 2
+  end
+  return 3
+end
+
+--- Fill colour for the LQ bar.
+function Display.lqBarColor()
+  return Display.healthColor(Display.lqLevel())
+end
+
+--- Colour for the LQ headline, which is a word and not a fill.
+function Display.lqTextColor()
+  return Display.healthTextColor(Display.lqLevel())
+end
+
+--- Fill colour for the headroom bar.
+function Display.headroomBarColor()
+  return Display.healthColor(Display.marginLevel())
+end
+
+-- Blink periods in getTime() ticks, which run at 10 ms. Halved for the on/off
+-- phase, so BLINK_SLOW is 1 Hz and BLINK_FAST is 4 Hz.
+local BLINK_SLOW = 50
+local BLINK_FAST = 12
+
+--- Whether a blink of the given half-period is in its lit phase.
+local function lit(halfPeriod)
+  return math.floor(getTime() / halfPeriod) % 2 == 0
+end
+
+--- Status LED colour.
+--- Red means bad and blinking means the link is broken or bound to the wrong
+--- model; solid means the link works and only the numbers are poor. The
+--- reference widgets blink to mean "healthy", which teaches the eye to ignore
+--- a blinking dot -- the one thing it must not do here.
+--- The off phase returns the track colour rather than hiding the dot, so it
+--- reads as an LED that is off instead of a hole in the strip, and stays right
+--- under a transparent background.
+function Display.ledColor()
+  local level = Telemetry.statusLevel()
+  local STATUS = Telemetry.STATUS
+  if level == STATUS.NO_MODULE then
+    return COLOR_THEME_DISABLED
+  end
+  if level == STATUS.NO_TELEMETRY then
+    return lit(BLINK_SLOW) and COLOR_THEME_WARNING or COLOR_THEME_DISABLED
+  end
+  if level == STATUS.MISMATCH then
+    return lit(BLINK_FAST) and COLOR_THEME_WARNING or COLOR_THEME_DISABLED
+  end
+  return Display.lqBarColor()
+end
+
+-- ExpressLRS power ladder in mW. The meter counts steps on this rather than
+-- scaling a percentage, because the steps are what the module actually offers
+-- and 100 mW is halfway up the ladder but 5% of the range.
+local POWER_STEPS = { 10, 25, 50, 100, 250, 500, 1000, 2000 }
+
+--- How many power steps are lit, 0 to #POWER_STEPS.
+function Display.powerSteps()
+  local tpwr = Telemetry.link.tpwr
+  if tpwr == nil then
+    return 0
+  end
+  local n = 0
+  for i = 1, #POWER_STEPS do
+    if tpwr >= POWER_STEPS[i] then
+      n = i
+    end
+  end
+  return n
+end
+
+--- Total cells in the power meter, so a layout can size it without knowing
+--- the ladder.
+function Display.powerStepCount()
+  return #POWER_STEPS
+end
+
+--- Colour for antenna cell n (1 or 2): lit when that path is the active one.
+--- A factory, not a callback -- call it when building.
+function Display.antColor(n)
+  return function()
+    if not Telemetry.isConnected() then
+      return COLOR_THEME_DISABLED
+    end
+    -- ANT is 0-based and the cells are 1-based, same convention as the
+    -- full-screen page's "Ant 1" / "Ant 2" rows.
+    if (Telemetry.link.ant or 0) + 1 == n then
+      -- The theme's accent, not COLOR_THEME_PRIMARY1: that is the text colour,
+      -- RGB(0,0,0) on the light themes, and a filled black block is not text.
+      -- This cell means "the link is on this path", which is what the accent
+      -- says everywhere else in EdgeTX.
+      return COLOR_THEME_FOCUS
+    end
+    return COLOR_THEME_DISABLED
+  end
+end
+
+--- Detail line colour: warns as the link margin shrinks, neutral while there
+--- is no margin to judge -- no link, or a rate with no published floor.
+--- Deliberately not the health ramp: a line of text that turns green whenever
+--- nothing is wrong is noise, while a bar that turns green is the point of
+--- drawing it.
+function Display.detailColor()
+  local db = Telemetry.marginDb()
+  if db == nil then
     return COLOR_THEME_SECONDARY1
   end
-  return rangeColor(Telemetry.rangePct)
+  local level = Display.marginLevel()
+  if level == 1 then
+    return COLOR_THEME_SECONDARY1
+  end
+  return Display.healthTextColor(level)
 end
 
 --- Hero label font for one tier of a screen's WidgetUI.fonts table.
@@ -254,4 +463,4 @@ end
 -- Return components
 -- ============================================================================
 
-return Display, WidgetLayout
+return Display

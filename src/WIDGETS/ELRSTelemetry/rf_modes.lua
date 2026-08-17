@@ -185,7 +185,14 @@ end
 --- the rate is unknown. Rates the tables carry as 0 are unrated, not 0 dBm.
 function RfModes.floor(rfmd)
   local floors = RfModes._floors
-  return floors and floors[rfmd + 1]
+  local dbm = floors and floors[rfmd + 1]
+  -- 0 is the tables' placeholder for a rate ExpressLRS publishes no figure
+  -- for. It has to become nil here: 0 is a truthy number, so callers guarding
+  -- with `or <default>` would take it for a real sensitivity of 0 dBm.
+  if dbm == 0 then
+    return nil
+  end
+  return dbm
 end
 
 -- ============================================================================

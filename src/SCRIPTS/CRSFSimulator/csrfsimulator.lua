@@ -44,6 +44,10 @@ local shim = loadScript("/SCRIPTS/CRSFSimulator/shim.lua")()
 --                    Shows armed warning in subtitle.
 --   "single_antenna" RX with a single RF path: 2RSS pinned to 0, so the
 --                    widgets report no diversity.
+--   "unrated_rate"   TX + RX connected on a packet rate ExpressLRS publishes
+--                    no receiver sensitivity for. There is no floor to
+--                    measure RSSI against, so anything drawn against one has
+--                    to fall back instead of scaling off a guess.
 --   "slow_loading"   TX + RX connected but PARAMETER_READ responses are
 --                    delayed by ~2 seconds each. Tests how the UI renders
 --                    during slow field discovery (e.g. "Loading..." states
@@ -586,13 +590,18 @@ local txDevice = {
       units = "",
     },
     { id = 12, parent = 10, type = CRSF.UINT8, name = "Channel", value = 1, min = 1, max = 8, units = "" },
+    -- Power level 2, pit mode off: a VTX whose power ExpressLRS is managing.
+    -- At "-" the folder name drops the power and pit mode segments entirely and
+    -- the Pitmode field is hidden, so nothing downstream has a power level or a
+    -- pit state to render -- which makes it the wrong default for a mock whose
+    -- job is to exercise the display.
     {
       id = 13,
       parent = 10,
       type = CRSF.TEXT_SELECTION,
       name = "Pwr Lvl",
       options = "-;1;2;3;4;5;6;7;8",
-      value = 0,
+      value = 2,
       units = "",
     },
     {
@@ -1169,6 +1178,7 @@ local function getElrsFlags()
     or config.scenario == "slow_loading"
     or config.scenario == "single_antenna"
     or config.scenario == "weak_link"
+    or config.scenario == "unrated_rate"
   then
     flags = 0x01 -- connected
   else
@@ -1622,6 +1632,10 @@ local moduleFound = (config.scenario ~= "no_module")
 
 local txModuleTelemetry = { TPWR = 50 }
 
+-- TQly/TRSS are the downlink pair: the RX->TX telemetry path, reported by the
+-- handset's own receiver. They run a few dB behind the uplink in every
+-- scenario because the receiver transmits at a fraction of the module's power,
+-- which is the asymmetry the widget exists to show.
 local scenarioTelemetry = {
   normal = {
     TPWR = 50,
@@ -1630,6 +1644,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -93,
     RQly = 99,
     ANT = 1,
+    TQly = 100,
+    TRSS = -95,
     RxBt = 15.2,
     Curr = 12.5,
     FM = "ACRO",
@@ -1647,6 +1663,8 @@ local scenarioTelemetry = {
     ["2RSS"] = 0,
     RQly = 97,
     ANT = 0,
+    TQly = 100,
+    TRSS = -91,
     RxBt = 15.1,
     Curr = 11.0,
     FM = "ACRO",
@@ -1662,6 +1680,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -82,
     RQly = 100,
     ANT = 0,
+    TQly = 100,
+    TRSS = -83,
     RxBt = 14.8,
     Curr = 28.5,
     FM = "ACRO",
@@ -1669,6 +1689,27 @@ local scenarioTelemetry = {
     GSpd = 42.7,
     Alt = 85,
     GPS = { lat = 54.7050, lon = 25.3100 },
+  },
+  -- A packet rate ExpressLRS publishes no sensitivity figure for (v3 index 18,
+  -- "9K1000", carried in the tables as 0). There is no floor to measure
+  -- against, so everything derived from one has to fall back rather than draw
+  -- a bar against a guessed number.
+  unrated_rate = {
+    TPWR = 250,
+    RFMD = 18,
+    ["1RSS"] = -79,
+    ["2RSS"] = -84,
+    RQly = 98,
+    ANT = 0,
+    TQly = 100,
+    TRSS = -88,
+    RxBt = 15.4,
+    Curr = 9.8,
+    FM = "ACRO",
+    Sats = 10,
+    GSpd = 18.2,
+    Alt = 96,
+    GPS = { lat = 54.6872, lon = 25.2797 },
   },
   -- Bench-realistic signal: a mismatch is caught next to the quad, and the
   -- active-antenna RSSI must clear the model-match poll's -70 dBm gate.
@@ -1679,6 +1720,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -58,
     RQly = 95,
     ANT = 1,
+    TQly = 100,
+    TRSS = -61,
     RxBt = 15.8,
     Curr = 0.5,
   },
@@ -1691,6 +1734,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -58,
     RQly = 95,
     ANT = 1,
+    TQly = 100,
+    TRSS = -61,
     RxBt = 15.8,
     Curr = 0.5,
   },
@@ -1704,6 +1749,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -58,
     RQly = 95,
     ANT = 1,
+    TQly = 100,
+    TRSS = -61,
     RxBt = 15.8,
     Curr = 0.5,
   },
@@ -1716,6 +1763,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -88,
     RQly = 60,
     ANT = 0,
+    TQly = 62,
+    TRSS = -97,
     RxBt = 15.2,
     Curr = 12.5,
     FM = "ACRO",
@@ -1732,6 +1781,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -93,
     RQly = 99,
     ANT = 1,
+    TQly = 100,
+    TRSS = -95,
     RxBt = 15.2,
     Curr = 12.5,
   },
@@ -1743,6 +1794,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -93,
     RQly = 99,
     ANT = 1,
+    TQly = 100,
+    TRSS = -95,
     RxBt = 15.2,
     Curr = 12.5,
     FM = "ACRO",
@@ -1759,6 +1812,8 @@ local scenarioTelemetry = {
     ["2RSS"] = -93,
     RQly = 99,
     ANT = 1,
+    TQly = 100,
+    TRSS = -95,
     RxBt = 15.2,
     Curr = 12.5,
     FM = "ACRO",
@@ -1774,11 +1829,20 @@ local scenarioTelemetry = {
 local sensorJitter = {
   ["1RSS"] = 3, -- +/- 3 dBm
   ["2RSS"] = 3,
+  TRSS = 3,
   RQly = 2, -- +/- 2%
+  TQly = 2,
   RxBt = 0.05, -- +/- 0.05V
   Curr = 2.0, -- +/- 2A
   GSpd = 3.0,
   Alt = 5,
+}
+
+-- Upper bounds the jitter may not cross, for sensors whose range is fixed by
+-- what they measure rather than by the scenario.
+local sensorCeiling = {
+  RQly = 100,
+  TQly = 100,
 }
 
 -- Per-scenario sensors that step through a fixed sequence instead of jittering,
@@ -1845,6 +1909,13 @@ local function updateTelemetryCache()
       local val = base + (math.random() * 2 - 1) * jit
       if jit == math.floor(jit) then
         val = math.floor(val + 0.5)
+      end
+      -- A link quality is a percentage of packets received, so it cannot
+      -- exceed 100. Jittering a base of 99 was handing the widgets 101, which
+      -- is not a reading any receiver can produce.
+      local ceiling = sensorCeiling[sensorId]
+      if ceiling and val > ceiling then
+        val = ceiling
       end
       telemetryCache[sensorId] = val
     else
