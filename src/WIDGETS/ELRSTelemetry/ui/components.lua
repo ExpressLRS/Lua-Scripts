@@ -38,6 +38,11 @@ local TRACK_OPACITY = 90
 local BRAND = "ExpressLRS"
 local BRAND_SHORT = "ELRS"
 
+-- The mismatch banner, and the form for a strip that carries the name as well.
+-- Caps either way: this is the one thing on the strip worth interrupting for.
+local MISMATCH = "MODEL MISMATCH!"
+local MISMATCH_SHORT = "MISMATCH!"
+
 --- Side of one antenna cell. Half the row, so the pair sits at the LED's
 --- weight rather than the text's.
 local function antCell(m)
@@ -442,16 +447,39 @@ function Components.statusStrip(dst, rect, y, m, spec)
       antX = rect.x + rect.w - antW
     end
   end
+  local nameX = textX
+  if named then
+    textX = textX + Components.textWidth(BRAND, SMLSIZE) + nameGap
+  end
+
+  -- The banner runs from wherever the readings start to the end of the strip,
+  -- so putting the name first takes width off it. Shortened rather than
+  -- squeezed: a banner is no use clipped, and "MISMATCH!" is unambiguous under
+  -- a name that has just said which link it is about.
+  local banner = MISMATCH
+  local bannerX = textX
+  if Components.textWidth(banner, BOLD) > rect.x + rect.w - bannerX then
+    banner = MISMATCH_SHORT
+  end
+  -- Nothing left that fits, so the name yields the strip for as long as the
+  -- mismatch stands. Last resort, and in the other direction from everywhere
+  -- else here: the binding being wrong outranks even saying whose binding.
+  local nameHides = Components.textWidth(banner, BOLD) > rect.x + rect.w - bannerX
+  if nameHides then
+    bannerX = nameX
+  end
+
   if named then
     Components.label(dst, {
-      x = textX,
+      x = nameX,
       y = y,
       font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
-      -- A constant, so it costs no closure and no per-frame string hash.
+      -- A constant, so it costs no closure and no per-frame string hash --
+      -- except in the one case where the banner needs its width.
       text = BRAND,
+      visible = nameHides and Display.isNotMismatch or nil,
     })
-    textX = textX + Components.textWidth(BRAND, SMLSIZE) + nameGap
   end
 
   Components.label(dst, {
@@ -463,14 +491,14 @@ function Components.statusStrip(dst, rect, y, m, spec)
     visible = Display.isNotMismatch,
   })
   Components.label(dst, {
-    x = textX,
+    x = bannerX,
     y = y,
     font = BOLD,
     color = COLOR_THEME_WARNING,
     -- A constant label plus a bool closure, not a formatter: statusText()
     -- keeps title case for the full-screen subtitle it also feeds, and a
     -- string closure would be hashed every frame to say the same thing.
-    text = "MODEL MISMATCH!",
+    text = banner,
     visible = Display.isMismatch,
   })
 
