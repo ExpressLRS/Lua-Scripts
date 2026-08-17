@@ -1,7 +1,7 @@
 ---------------------------------------------------------------------------
 -- ELRS Telemetry Widget - Display Components                            --
 -- Loaded via loadScript() from ELRSTelemetry/loadable.lua with          --
--- (Telemetry); returns (Display, WidgetLayout).                         --
+-- (Telemetry); returns the Display table.                               --
 --                                                                       --
 -- Display is the read model the ui/ files consume: zero-argument        --
 -- formatters passed by reference as LVGL text/color callbacks, so they  --
@@ -16,66 +16,6 @@
 local Telemetry = ...
 
 local Display = {}
-
--- ============================================================================
--- WidgetLayout: minimized zone container builders
--- ============================================================================
-
-local WidgetLayout = {}
-
-function WidgetLayout.column(w, h, opa, children)
-  lvgl.build({
-    {
-      type = lvgl.RECTANGLE,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      color = COLOR_THEME_PRIMARY2,
-      opacity = opa,
-      filled = true,
-    },
-    {
-      type = lvgl.BOX,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      align = LEFT,
-      flexFlow = lvgl.FLOW_COLUMN,
-      flexPad = 0,
-      borderPad = lvgl.PAD_SMALL,
-      children = children,
-    },
-  })
-end
-
-function WidgetLayout.row(w, h, opa, children)
-  lvgl.build({
-    {
-      type = lvgl.RECTANGLE,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      color = COLOR_THEME_PRIMARY2,
-      opacity = opa,
-      filled = true,
-    },
-    {
-      type = lvgl.BOX,
-      x = 0,
-      y = 0,
-      w = w,
-      h = h,
-      align = LEFT + VCENTER,
-      flexFlow = lvgl.FLOW_ROW,
-      flexPad = lvgl.PAD_TINY,
-      borderPad = lvgl.PAD_SMALL,
-      children = children,
-    },
-  })
-end
 
 -- ============================================================================
 -- Link state, as the view asks about it
@@ -523,4 +463,4 @@ end
 -- Return components
 -- ============================================================================
 
-return Display, WidgetLayout
+return Display

@@ -18,7 +18,7 @@ local zone, options, Telemetry = ...
 -- Display components
 -- ============================================================================
 
-local Display, WidgetLayout = loadScript("/WIDGETS/ELRSTelemetry/ui/display.lua")(Telemetry)
+local Display = loadScript("/WIDGETS/ELRSTelemetry/ui/display.lua")(Telemetry)
 local Components = loadScript("/WIDGETS/ELRSTelemetry/ui/components.lua")(Display)
 
 -- ============================================================================
@@ -52,7 +52,6 @@ local uiPath = table.concat({ "/WIDGETS/ELRSTelemetry/ui/", screenId, ".lua" })
 local WidgetUI = loadScript(uiPath)({
   Display = Display,
   bgOpacity = bgOpacity,
-  WidgetLayout = WidgetLayout,
   Components = Components,
 })
 

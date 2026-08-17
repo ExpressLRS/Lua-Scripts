@@ -236,6 +236,29 @@ function Components.bar(dst, rect, y, spec)
   return y + h
 end
 
+--- The LED in a fixed lane at the left of a row, returning the x where text
+--- starts. The lane is what everything after it measures from, so the dot's
+--- radius can be tuned without the readings shifting sideways.
+--- Shared with the tiers that have no status strip, so the LED sits at one
+--- x on every tier and a widget resized between them does not appear to move
+--- its indicator.
+function Components.ledLane(dst, rect, y, m)
+  local lane = math.floor(m.sml / 2) + 2
+  Components.led(dst, {
+    x = rect.x + math.floor(lane / 2),
+    -- Centred on the text's line box, not on the row. The row is the line box
+    -- plus padding, so centring in it drops the dot below the text it sits
+    -- beside -- close enough to look like a mistake rather than a choice.
+    y = y + math.floor(m.sml / 2),
+    -- Deliberately smaller than the lane. An indicator only has to be seen, and
+    -- at half the row height it stops reading as a dot and starts competing
+    -- with the text beside it.
+    radius = math.floor(m.sml / 4) + 1,
+    color = Display.ledColor,
+  })
+  return rect.x + lane + m.pad
+end
+
 --- The status LED. x and y are the centre, not a corner.
 function Components.led(dst, spec)
   dst[#dst + 1] = {
@@ -382,24 +405,7 @@ end
 --- teaches the eye to ignore the banner that matters.
 function Components.statusStrip(dst, rect, y, m, spec)
   local h = m.sml + 4
-  -- The LED gets a fixed lane sized off the row, and sits centred in it. The
-  -- lane is what the text after it measures from, so the dot's radius can be
-  -- tuned without the RF mode shifting sideways.
-  local lane = math.floor(m.sml / 2) + 2
-  -- Deliberately smaller than the lane. An indicator only has to be seen, and
-  -- at half the row height it stops reading as a dot and starts competing with
-  -- the text it sits beside.
-  local r = math.floor(m.sml / 4) + 1
-  Components.led(dst, {
-    x = rect.x + math.floor(lane / 2),
-    -- Centred on the text's line box, not on the strip. The strip is the line
-    -- box plus padding, so centring in it drops the dot below the RF mode it
-    -- sits beside -- close enough to look like a mistake rather than a choice.
-    y = y + math.floor(m.sml / 2),
-    radius = r,
-    color = Display.ledColor,
-  })
-  local textX = rect.x + lane + m.pad
+  local textX = Components.ledLane(dst, rect, y, m)
 
   -- Right-hand end, laid out from the right edge inward. Measured before the
   -- name because it is what the name has to fit inside of.
@@ -945,6 +951,191 @@ function Components.halfTier(w, h, opa, m, spec)
   })
   if showBattery then
     Components.groupRow(panel, inner, y + air, m, { battery })
+  end
+
+  lvgl.build(root)
+end
+
+--- The 1/3 tier: the strip, then LQ and the RSSI pair sharing a row, then the
+--- headroom bar.
+--- Three rows is all there is here, and the strip keeps one of them: it is what
+--- carries the name, the packet rate, the power reading, the antenna and the
+--- mismatch banner, all of which would otherwise have to be given up one at a
+--- time. That is what pays for putting LQ and the RSSI pair on one row -- the
+--- taller tiers give RSSI a caption row of its own, and here that row is the
+--- bar's height instead.
+--- Losing the caption costs nothing: "-85 / -108 dBm" carries its own unit, and
+--- with one bar left there is no second reading it could be mistaken for.
+--- The LQ bar is what goes. Between the two, the headroom bar is the one that
+--- says something the number beside it does not -- it recalibrates with the
+--- packet rate -- where an LQ bar plots a percentage that is already legible as
+--- a percentage.
+function Components.thirdTier(w, h, opa, m, spec)
+  local f = Components.frame(w, h, m)
+  local pad, inner = f.pad, f.inner
+  local AIR_GAPS = 2
+  -- Thinner than this and a bar is a line, not a meter.
+  local MIN_BAR = 3
+  local fixed = pad * 2
+    + (m.sml + 4) -- status strip
+    + spec.lqH
+  local slack = f.h - fixed
+  local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.5), 14))
+  local air = math.max(0, math.floor((slack - barH) / AIR_GAPS))
+
+  local root = {}
+  local panel = Components.panel(root, f.panel, { opacity = opa })
+
+  local y = Components.statusStrip(panel, inner, pad, m, { powerText = true }) + air
+  Components.label(panel, {
+    x = inner.x,
+    y = y,
+    font = spec.lqFont,
+    color = Display.lqTextColor,
+    text = Display.lqText,
+  })
+  Components.label(panel, {
+    x = inner.x,
+    -- On the LQ reading's baseline, like the panel's wordmark: labels position
+    -- from the top, so small type beside a large number has to be dropped by
+    -- the difference between them.
+    y = y + math.max(0, spec.lqH - m.sml),
+    w = inner.w,
+    align = RIGHT,
+    font = SMLSIZE,
+    color = Display.detailColor,
+    text = Display.signalText,
+  })
+  y = y + spec.lqH + air
+  Components.bar(panel, inner, y, {
+    h = barH,
+    pct = Display.headroomPct,
+    color = Display.headroomBarColor,
+    visible = Display.hasHeadroom,
+  })
+
+  lvgl.build(root)
+end
+
+--- The short tiers -- 1/4 and 1/6 -- as one composition: a row of readings over
+--- the headroom bar, with the bar thinning and the row shedding cells as the
+--- zone shrinks.
+--- One function for both because the difference between them turned out to be
+--- a bar height and a cell count, both of which are measured here anyway. Two
+--- builders differing only in that were two places to fix the same bug.
+--- The strip is what goes at this height, and the mode, power and antenna go
+--- with it. Two rows cannot hold a strip and a bar, and the bar is what this
+--- widget is: below the strip the choice is between a row of numbers any
+--- telemetry screen could show and the one instrument only this widget has.
+--- The RSSI pair keeps the left edge because the bar grows from there and plots
+--- exactly that reading. LQ goes to the right, so it reads as the number it is
+--- rather than as the bar's label.
+--- Then the packet rate and power come back as one cell where the width allows,
+--- and the name after them -- readings before identity, since the mode and the
+--- power are things only this row can tell you at this size.
+--- The LED keeps its lane, so a link that is down still says so on the tier
+--- with no room to say it in words, and the hero label falls back to the status
+--- text: there is no strip here to carry a banner.
+function Components.compactTier(w, h, opa, m, spec)
+  local f = Components.frame(w, h, m)
+  local pad, inner = f.pad, f.inner
+  -- Thinner than this and a bar is a line, not a meter. Below it the row takes
+  -- the whole panel and centres in it, rather than sitting above a smear.
+  local MIN_BAR = 3
+  local vpad = pad
+  local slack = f.h - (vpad * 2 + spec.lqH)
+  if slack < MIN_BAR then
+    -- A 1/6 zone is 28px on 480x272, which is the row and its padding and
+    -- nothing else. So the padding gives: the left and right edges keep theirs,
+    -- because that is what a widget in the zone above lines its text up
+    -- against, and the top and bottom drop to the smallest gap the theme has.
+    -- Worth it for 3px of bar, because the bar is the reading that no other
+    -- widget on the screen offers -- and losing it here is losing it at the
+    -- size the widget is most often squeezed into.
+    vpad = m.gap
+    slack = f.h - (vpad * 2 + spec.lqH)
+  end
+  local barH = slack >= MIN_BAR and math.max(MIN_BAR, math.min(math.floor(slack * 0.6), 12)) or 0
+  local air = math.max(0, slack - barH)
+  -- Small type beside a large number sits on its baseline, not its top.
+  local drop = math.max(0, spec.lqH - m.sml)
+
+  local root = {}
+  local panel = Components.panel(root, f.panel, { opacity = opa })
+  -- With no bar the row has the panel to itself, so it centres; with one it
+  -- keeps the top and the bar takes the slack.
+  local y = vpad + (barH > 0 and 0 or math.floor(air / 2))
+  local textX = Components.ledLane(panel, inner, y, m)
+  local right = inner.x + inner.w
+
+  local detailW = Components.textWidth("K1000Full 2000mW", SMLSIZE)
+  local avail = right
+    - textX
+    - Components.textWidth("-105 / -105 dBm", SMLSIZE)
+    - Components.textWidth("LQ 100%", spec.lqFont)
+    - m.pad * 3
+  local showDetail = avail >= detailW + m.pad
+  if showDetail then
+    avail = avail - detailW - m.pad
+  end
+  local brand = Components.brandText(avail)
+
+  if brand then
+    local brandW = Components.textWidth(brand, SMLSIZE)
+    Components.label(panel, {
+      x = right - brandW,
+      y = y + drop,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = brand,
+    })
+    right = right - brandW - m.pad * 2
+  end
+  if showDetail then
+    Components.label(panel, {
+      x = right - detailW,
+      y = y + drop,
+      w = detailW,
+      align = RIGHT,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = Display.rfDetailText,
+      -- Hidden with the other readings while the hero carries a status, which
+      -- is the one case a long hero string reaches this far across the row.
+      visible = Display.isNotMismatch,
+    })
+    right = right - detailW - m.pad
+  end
+
+  Components.label(panel, {
+    x = textX,
+    y = y,
+    w = right - textX,
+    align = RIGHT,
+    font = spec.lqFont,
+    color = Display.heroColor,
+    -- The status when there is one: no strip means no banner, so this label is
+    -- the only thing that can say the link is down or the model is wrong. It is
+    -- right-aligned, so a long status grows leftward across the row it has just
+    -- emptied rather than into the mark at its end.
+    text = Display.heroText,
+  })
+  Components.label(panel, {
+    x = textX,
+    y = y + drop,
+    font = SMLSIZE,
+    color = Display.detailColor,
+    text = Display.signalText,
+    visible = Display.isNotMismatch,
+  })
+
+  if barH > 0 then
+    Components.bar(panel, inner, vpad + spec.lqH + air, {
+      h = barH,
+      pct = Display.headroomPct,
+      color = Display.headroomBarColor,
+      visible = Display.hasHeadroom,
+    })
   end
 
   lvgl.build(root)
