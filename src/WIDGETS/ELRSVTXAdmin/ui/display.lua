@@ -5,7 +5,8 @@
 --                                                                       --
 -- VTXDisplay is the read-model the per-screen ui/ files consume:        --
 -- zero-arg formatters passed by reference as LVGL text/color/visible    --
--- callbacks. WidgetLayout builds the minimized zone containers.         --
+-- callbacks, plus the card's composite rows. WidgetLayout builds the    --
+-- minimized zone containers.                                            --
 ---------------------------------------------------------------------------
 
 local VTXAdmin, PresetsStorage = ...
@@ -112,6 +113,43 @@ function VTXDisplay.statusText()
   return ""
 end
 
+--- The hero and the active preset cell take the theme's accent -- the reading
+--- is what the widget exists to show, and the accent is what "the current one"
+--- looks like everywhere else in EdgeTX. A confirmed pit mode outranks it:
+--- red on the reading itself is the one signal worth recolouring the hero for.
+--- An aux binding is not an assertion, so it stays on the accent.
+function VTXDisplay.heroColor()
+  if VTXAdmin.state.pitmode then
+    return RED
+  end
+  return COLOR_THEME_FOCUS
+end
+
+--- Pit mode as the header's right end spells it. "" when no power is set:
+--- ExpressLRS cannot send pit mode without it, and the firmware hides the
+--- field. A switch binding names the switch rather than asserting a position
+--- the folder name does not carry.
+function VTXDisplay.pitHeaderText()
+  if not VTXAdmin.hasPower() then
+    return ""
+  end
+  if VTXAdmin.state.pitmode then
+    return "PIT ON"
+  end
+  if VTXAdmin.state.pitmodeAux then
+    return table.concat({ "PIT ", VTXAdmin.state.pitmodeAux })
+  end
+  return "PIT OFF"
+end
+
+--- Red only when pit mode is confirmed on.
+function VTXDisplay.pitHeaderColor()
+  return VTXAdmin.state.pitmode and RED or COLOR_THEME_SECONDARY1
+end
+
+--- The power level in the terse form that rides beside the channel on the
+--- one-line tiers, e.g. "P2". "" when no power is set: ExpressLRS cannot
+--- report one, and a bare "P" would read as a reading stuck mid-arrival.
 function VTXDisplay.powerShort()
   if not VTXAdmin.hasPower() then
     return ""
@@ -119,6 +157,9 @@ function VTXDisplay.powerShort()
   return table.concat({ "P", VTXAdmin.state.power })
 end
 
+--- The same reading said in full, e.g. "Power 2", for the hero row -- at that
+--- size the terse form reads as part of the channel rather than as its own
+--- reading.
 function VTXDisplay.powerLong()
   if not VTXAdmin.hasPower() then
     return ""
@@ -126,136 +167,176 @@ function VTXDisplay.powerLong()
   return table.concat({ "Power ", VTXAdmin.state.power })
 end
 
---- Pit mode state. "" when no power is set: ExpressLRS cannot send pit mode without it.
---- A switch binding names the switch rather than asserting a position the folder name
---- does not carry.
-function VTXDisplay.pitText()
-  if not VTXAdmin.hasPower() then
-    return ""
-  end
-  if VTXAdmin.state.pitmode then
-    return "Pit Mode On"
-  end
-  if VTXAdmin.state.pitmodeAux then
-    return table.concat({ "Pit Mode ", VTXAdmin.state.pitmodeAux })
-  end
-  return "Pit Mode Off"
+--- The header row: the widget's name in the muted caption colour on the left,
+--- the pit state pinned to the right edge of the same line.
+--- Not a flex row: a right-aligned label needs an explicit width to align
+--- inside, so the two labels sit in a plain box at absolute x and the hidden
+--- pit label cannot reflow the name.
+--- w is the zone width; the box subtracts the container's own padding so the
+--- right edge lands where every other row's content ends.
+function VTXDisplay.buildHeader(w)
+  local cw = w - 2 * lvgl.PAD_SMALL
+  return {
+    type = lvgl.BOX,
+    w = cw,
+    children = {
+      {
+        type = lvgl.LABEL,
+        x = 0,
+        y = 0,
+        font = SMLSIZE,
+        color = COLOR_THEME_SECONDARY1,
+        text = "VTX Admin",
+      },
+      {
+        type = lvgl.LABEL,
+        x = 0,
+        y = 0,
+        w = cw,
+        align = RIGHT,
+        font = SMLSIZE,
+        color = VTXDisplay.pitHeaderColor,
+        text = VTXDisplay.pitHeaderText,
+        visible = VTXDisplay.showChannel,
+      },
+    },
+  }
 end
 
---- As pitText, but reports a disabled VTX instead of falling silent.
-function VTXDisplay.pitTextLong()
-  if VTXAdmin.isDisabled() then
-    return "VTX Disabled"
-  end
-  return VTXDisplay.pitText()
+--- The hero pair for a flex column: the status while the VTX is quiet, and
+--- once it is tuned the band and channel in the tier's display font with
+--- "Power 2" sat on its baseline beside it. Two children to append in order
+--- -- a hidden flex child costs no height, so only the live one takes a row.
+--- The status takes the same display font as the reading it stands in for:
+--- the two swap over one row, and at two sizes everything below them jumps
+--- the moment the VTX loads.
+--- A plain box with absolute children rather than a flex row: small type
+--- beside a large number sits on its baseline, not its top, and flex has no
+--- way to say that. Same mechanics as the telemetry hero's caption -- the
+--- power's x is reserved against the widest reading, so it never moves when
+--- the channel changes.
+function VTXDisplay.buildHero(font)
+  local heroH = select(2, lcd.sizeText("0", font))
+  -- Four fifths of the height difference, not all of it: line boxes carry
+  -- descender room in proportion to the font, so aligning box bottoms sinks
+  -- the small text below the shared baseline by the difference in descent.
+  local drop = math.max(0, math.floor((heroH - select(2, lcd.sizeText("0", SMLSIZE))) * 4 / 5))
+  return {
+    type = lvgl.LABEL,
+    align = LEFT,
+    font = font,
+    -- The muted theme colour, not the text primary: at the hero size a black
+    -- "Loading..." reads as the reading itself, and a status is background.
+    color = COLOR_THEME_SECONDARY1,
+    text = VTXDisplay.statusText,
+    visible = VTXDisplay.showStatus,
+  }, {
+    type = lvgl.BOX,
+    h = heroH,
+    visible = VTXDisplay.showChannel,
+    children = {
+      {
+        type = lvgl.LABEL,
+        x = 0,
+        y = 0,
+        font = font,
+        color = VTXDisplay.heroColor,
+        text = VTXDisplay.bandChannel,
+      },
+      {
+        type = lvgl.LABEL,
+        x = (lcd.sizeText("R8", font)) + lvgl.PAD_MEDIUM,
+        y = drop,
+        font = SMLSIZE,
+        color = COLOR_THEME_SECONDARY1,
+        text = VTXDisplay.powerLong,
+      },
+    },
+  }
 end
 
---- Terse flag for narrow tiers. Only a confirmed pit mode is worth the width.
-function VTXDisplay.pitShort()
-  return VTXAdmin.state.pitmode and "Pit" or ""
-end
-
---- Red only when pit mode is confirmed on. An aux binding is not an assertion.
-function VTXDisplay.pitColor()
-  return VTXAdmin.state.pitmode and RED or COLOR_THEME_SECONDARY1
-end
-
-function VTXDisplay.detailLine()
-  if not VTXAdmin.hasPower() then
-    return ""
+--- The 6POS presets as a row of six fixed-width cells, the latched one lit in
+--- the accent. Always exactly six cells: an unset preset shows "--" rather
+--- than giving its cell up, so the position is the cell's place in the row.
+--- Everything live rides in closures -- colours and label text -- so the
+--- cells themselves never move or resize, and presets edited in another
+--- instance's editor show up without a rebuild.
+--- spec.cellH, spec.font and spec.rounded come from the screen file's scale.
+--- Returns nil when the presets feature is off or no module is present.
+function VTXDisplay.buildCells(spec)
+  if not (VTXAdmin.hasModule() and PresetsStorage.enabled) then
+    return nil
   end
-  return table.concat({ VTXDisplay.powerShort(), " ", VTXDisplay.pitText() })
-end
-
-function VTXDisplay.detailLong()
-  if VTXAdmin.isDisabled() then
-    return "VTX Disabled"
+  local font = spec.font or SMLSIZE
+  -- One width for all six, measured against the widest label a cell can carry.
+  local cellW = math.max((lcd.sizeText("R8", font)), (lcd.sizeText("--", font))) + 2 * lvgl.PAD_SMALL
+  local function isActive(idx)
+    return PresetsStorage.latch.lastPos == idx
   end
-  if not VTXAdmin.hasPower() then
-    return ""
+  local function cellText(idx)
+    local p = PresetsStorage.items[idx]
+    if p.band == 0 then
+      return "--"
+    end
+    return table.concat({ VTXAdmin.BAND_LETTERS[p.band] or "?", p.channel })
   end
-  return table.concat({ VTXDisplay.powerLong(), "  ", VTXDisplay.pitText() })
-end
-
---- Whether detailLong() has anything to say. On the tiers that give it a column
---- row of its own an empty label still costs a full line, and that line is the
---- gap that opens between the band and the cheatsheet on a VTX reporting no
---- power. A flex column drops hidden children rather than reserving their space,
---- so this closes the gap instead of merely blanking it.
-function VTXDisplay.hasDetail()
-  return VTXAdmin.isDisabled() or VTXAdmin.hasPower()
-end
-
-function VTXDisplay.mainColor()
-  if VTXAdmin.state.pitmode then
-    return RED
-  end
-  return COLOR_THEME_PRIMARY1
-end
-
-function VTXDisplay.build6posLabels(font)
-  if not VTXAdmin.hasModule() then
-    return {}
-  end
-  if not PresetsStorage.enabled then
-    return {}
-  end
-  local labels = {}
-  for i = 1, 6 do
-    local idx = i
-    labels[#labels + 1] = {
-      type = lvgl.LABEL,
-      font = font or SMLSIZE,
+  local cells = {}
+  for idx = 1, 6 do
+    cells[idx] = {
+      type = lvgl.RECTANGLE,
+      w = cellW,
+      h = spec.cellH,
+      filled = true,
+      rounded = spec.rounded,
       color = function()
-        return (PresetsStorage.latch.lastPos == idx) and COLOR_THEME_PRIMARY1 or COLOR_THEME_DISABLED
+        return isActive(idx) and COLOR_THEME_FOCUS or COLOR_THEME_DISABLED
       end,
-      text = function()
-        local p = PresetsStorage.items[idx]
-        if p.band == 0 then
-          return table.concat({ idx, ":--" })
-        end
-        return table.concat({ idx, ":", VTXAdmin.BAND_LETTERS[p.band] or "?", p.channel })
+      -- Part opacity is background-only on a rectangle, so the inactive cells
+      -- sit back while their labels keep full weight.
+      opacity = function()
+        return isActive(idx) and 255 or 90
       end,
+      children = {
+        {
+          type = lvgl.LABEL,
+          w = cellW,
+          align = CENTER + VCENTER,
+          font = font,
+          color = function()
+            return isActive(idx) and COLOR_THEME_PRIMARY2 or COLOR_THEME_SECONDARY1
+          end,
+          text = function()
+            return cellText(idx)
+          end,
+        },
+      },
     }
   end
-  return labels
-end
-
---- Wrap 6POS labels in a row box. Shared by the one-row and two-row cheatsheets.
-local function cheatsheetRow(labels)
   return {
     type = lvgl.BOX,
     flexFlow = lvgl.FLOW_ROW,
     borderPad = 0,
-    flexPad = lvgl.PAD_TINY,
+    -- Tighter than the theme paddings: six cells read as one control when the
+    -- gaps between them are beats, not breaks.
+    flexPad = 4,
     align = LEFT,
     visible = VTXAdmin.hasModule,
-    children = labels,
+    children = cells,
   }
 end
 
---- Single row of all six presets, for tiers with only one line to spare.
-function VTXDisplay.buildCheatsheet(font)
-  local labels = VTXDisplay.build6posLabels(font)
-  if #labels == 0 then
-    return nil
-  end
-  return cheatsheetRow(labels)
-end
-
---- The headline row: the widget's name, then the band and channel, on one line at
---- one size. For the tiers with no row to spare for a title of its own.
---- Both at one size on purpose. The name is a caption in the muted theme colour
---- and the reading is the primary, which is what lets them share a line without
---- competing -- where two type sizes in one breath read as two importances, and
---- a name shrunk beside its own value reads as an afterthought.
+--- The headline row: the widget's name, then the band and channel, on one line.
+--- For the tiers with no row to spare for a title of its own. The name keeps
+--- the small muted caption type every other tier titles itself with; only the
+--- reading takes the tier's font and the accent, so the emphasis falls on the
+--- reading at every widget size.
 --- extras are trailing labels, for a tier with nowhere else to put them.
 function VTXDisplay.buildHeadline(w, font, extras)
   local children = {
     {
       type = lvgl.LABEL,
       align = LEFT,
-      font = font,
+      font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
       text = "VTX Admin",
     },
@@ -263,8 +344,16 @@ function VTXDisplay.buildHeadline(w, font, extras)
       type = lvgl.LABEL,
       align = LEFT,
       font = font,
-      color = VTXDisplay.mainColor,
+      color = VTXDisplay.heroColor,
       text = VTXDisplay.bandChannel,
+      visible = VTXDisplay.showChannel,
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = VTXDisplay.powerShort,
       visible = VTXDisplay.showChannel,
     },
   }
@@ -283,92 +372,6 @@ function VTXDisplay.buildHeadline(w, font, extras)
     borderPad = 0,
     children = children,
   }
-end
-
---- The power and pit-mode labels that ride a headline row, in the form the width
---- affords: pit mode said in full where there is room for it, and terse -- "Pit"
---- rather than "Pit Mode Off" -- where the name and the reading come first and
---- the row cannot hold all three whole.
---- Two labels either way, because pit mode carries its own colour: a confirmed
---- pit mode is the one thing on this row worth going red, and a single label
---- holding both readings could only be one colour.
---- A caller with no spare row for the status appends its own status label after
---- these.
-function VTXDisplay.buildDetailExtras(wide)
-  return {
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = SMLSIZE,
-      color = COLOR_THEME_SECONDARY1,
-      text = VTXDisplay.powerShort,
-      visible = VTXDisplay.showChannel,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = SMLSIZE,
-      color = VTXDisplay.pitColor,
-      text = wide and VTXDisplay.pitText or VTXDisplay.pitShort,
-      visible = VTXDisplay.showChannel,
-    },
-  }
-end
-
---- The rows 1/2 and 1/1 share: the name, the band and channel as a hero on its
---- own line, and the detail line. The caller appends its cheatsheet rows.
---- detailText overrides the detail formatter, for a screen too narrow for the
---- full one. Its emptiness follows hasDetail either way, since every form of the
---- line falls silent on the same two conditions.
-function VTXDisplay.buildHeroRows(fonts, detailText)
-  return {
-    {
-      type = lvgl.LABEL,
-      font = BOLD,
-      color = COLOR_THEME_SECONDARY1,
-      text = "VTX Admin",
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = BOLD,
-      color = VTXDisplay.mainColor,
-      text = VTXDisplay.statusText,
-      visible = VTXDisplay.showStatus,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = fonts.hero,
-      color = VTXDisplay.mainColor,
-      text = VTXDisplay.bandChannel,
-      visible = VTXDisplay.showChannel,
-    },
-    {
-      type = lvgl.LABEL,
-      align = LEFT,
-      font = fonts.detail,
-      color = COLOR_THEME_SECONDARY1,
-      text = detailText or VTXDisplay.detailLong,
-      visible = VTXDisplay.hasDetail,
-    },
-  }
-end
-
---- Two rows, 1-3 over 4-6. Fits narrow zones and reads larger where height allows.
-function VTXDisplay.buildCheatsheetRows(font)
-  local labels = VTXDisplay.build6posLabels(font)
-  if #labels == 0 then
-    return nil, nil
-  end
-  local row1, row2 = {}, {}
-  for i = 1, 3 do
-    row1[#row1 + 1] = labels[i]
-  end
-  for i = 4, 6 do
-    row2[#row2 + 1] = labels[i]
-  end
-  return cheatsheetRow(row1), cheatsheetRow(row2)
 end
 
 return VTXDisplay, WidgetLayout
