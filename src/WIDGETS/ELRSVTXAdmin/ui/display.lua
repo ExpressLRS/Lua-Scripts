@@ -261,15 +261,28 @@ end
 --- Everything live rides in closures -- colours and label text -- so the
 --- cells themselves never move or resize, and presets edited in another
 --- instance's editor show up without a rebuild.
---- spec.cellH, spec.font and spec.rounded come from the screen file's scale.
+--- spec.cellH, spec.font and spec.rounded come from the screen file's scale;
+--- spec.w is the width the row has to fit in.
 --- Returns nil when the presets feature is off or no module is present.
 function VTXDisplay.buildCells(spec)
   if not (VTXAdmin.hasModule() and PresetsStorage.enabled) then
     return nil
   end
+  local gap = 4
   local font = spec.font or SMLSIZE
   -- One width for all six, measured against the widest label a cell can carry.
   local cellW = math.max((lcd.sizeText("R8", font)), (lcd.sizeText("--", font))) + 2 * lvgl.PAD_SMALL
+  -- A zone too narrow for six content-sized cells squeezes them rather than
+  -- clipping the row: all six showing outranks their padding, and outranks
+  -- the tier's cell font too -- the type steps down before the text would.
+  if spec.w then
+    local fit = math.floor((spec.w - 5 * gap) / 6)
+    if font ~= SMLSIZE and fit < cellW and fit < (lcd.sizeText("R8", font)) + 2 * lvgl.PAD_TINY then
+      font = SMLSIZE
+      cellW = math.max((lcd.sizeText("R8", font)), (lcd.sizeText("--", font))) + 2 * lvgl.PAD_SMALL
+    end
+    cellW = math.min(cellW, math.max(fit, (lcd.sizeText("--", font))))
+  end
   local function isActive(idx)
     return PresetsStorage.latch.lastPos == idx
   end
@@ -318,7 +331,7 @@ function VTXDisplay.buildCells(spec)
     borderPad = 0,
     -- Tighter than the theme paddings: six cells read as one control when the
     -- gaps between them are beats, not breaks.
-    flexPad = 4,
+    flexPad = gap,
     align = LEFT,
     visible = VTXAdmin.hasModule,
     children = cells,

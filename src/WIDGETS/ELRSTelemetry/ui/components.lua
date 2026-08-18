@@ -44,6 +44,12 @@ local BRAND_SHORT = "ELRS"
 local MISMATCH = "MODEL MISMATCH!"
 local MISMATCH_SHORT = "MISMATCH!"
 
+-- The signal fit ladder's reserve strings: the widest string each form can
+-- render, so a narrowing row trades forms at a stable width instead of
+-- reflowing with the values.
+local SIGNAL_FULL = "-105 -105 / -105 dBm"
+local SIGNAL_SHORT = "-105 / -105 dBm"
+
 --- Slot side of one antenna dot. Half the row, so the pair sits at the status
 --- LED's weight rather than the text's.
 local function antCell(m)
@@ -494,15 +500,46 @@ function Components.valueRow(dst, rect, y, m, spec)
   return y + m.sml
 end
 
+--- The narrowest column that holds every cell of the grid: its widest caption
+--- plus the gap plus its widest value, reserved rather than measured live so
+--- the answer does not change with the readings.
+local function gridMinColW(m, rows)
+  local need = 0
+  for i = 1, #rows do
+    for j = 1, #rows[i] do
+      local cell = rows[i][j]
+      local cw = Components.textWidth(cell.caption, SMLSIZE) + m.pad + Components.textWidth(cell.reserve, SMLSIZE)
+      if cw > need then
+        need = cw
+      end
+    end
+  end
+  return need
+end
+
 --- The reading grid: two equal columns of caption-value cells, in rows.
 --- The captions are the sensor names EdgeTX itself puts in the model's
 --- telemetry list, mixed case and all, so the grid reads straight across to
 --- that list and to the module's own screen.
 --- Values sit a fixed gap after their caption, left-aligned, so a reading
 --- gaining a digit grows into its own column's slack and nothing reflows.
---- rows is a list of rows, each a list of { caption, text } cells.
+--- rows is a list of rows, each a list of { caption, text, reserve } cells --
+--- reserve being the widest string the value can render.
+--- A zone too narrow for two columns lays the same cells out one per line
+--- instead: a value running under its neighbour's caption reads as garbage,
+--- and the tall narrow zones this happens in have the height to trade.
 function Components.grid(dst, rect, y, m, rows)
   local colW = math.floor((rect.w - m.pad) / 2)
+  if colW < gridMinColW(m, rows) then
+    local flat = {}
+    for i = 1, #rows do
+      for j = 1, #rows[i] do
+        flat[#flat + 1] = { rows[i][j] }
+      end
+    end
+    rows = flat
+    colW = rect.w
+  end
   for i = 1, #rows do
     local row = rows[i]
     for j = 1, #row do
@@ -539,14 +576,28 @@ end
 local function gridRows()
   return {
     {
-      { caption = "PWR", text = Display.powerText },
-      { caption = "TQly", text = Display.tqlyText },
+      { caption = "PWR", text = Display.powerText, reserve = "2000 mW" },
+      { caption = "TQly", text = Display.tqlyText, reserve = "100 %" },
     },
     {
-      { caption = "BATT", text = Display.cellText },
-      { caption = "TRSS", text = Display.trssText },
+      { caption = "BATT", text = Display.cellText, reserve = "4S 3.75 V" },
+      { caption = "TRSS", text = Display.trssText, reserve = "-105 dBm" },
     },
   }
+end
+
+--- The widest signal formatter availW carries: the diversity pair against the
+--- rated floor, the active antenna against it, or the bare reading. The same
+--- degradation order the compact tier walks, shared by the rows and the hero
+--- that put the signal beside another reading.
+local function signalFit(availW)
+  if availW >= Components.textWidth(SIGNAL_FULL, SMLSIZE) then
+    return Display.signalText
+  end
+  if availW >= Components.textWidth(SIGNAL_SHORT, SMLSIZE) then
+    return Display.signalShortText
+  end
+  return Display.rssiText
 end
 
 -- ============================================================================
@@ -571,7 +622,15 @@ function Components.fullTier(w, h, opa, m, spec)
   local f = Components.frame(w, h, m)
   local pad, inner = f.pad, f.inner
 
-  local gridH = m.sml * 2 + m.gap
+  -- The grid's height depends on its shape: two columns of two rows where
+  -- the width holds them, one cell per line where it does not -- so the
+  -- shape is settled here, before the hero ladder divides what is left.
+  local rows = gridRows()
+  local gridLines = 2
+  if math.floor((inner.w - m.pad) / 2) < gridMinColW(m, rows) then
+    gridLines = 4
+  end
+  local gridH = m.sml * gridLines + m.gap * (gridLines - 1)
   local MIN_BAR = 4
   -- Everything except the hero and the two bars. This has to match what the
   -- blocks below actually consume, or the last row walks off the bottom of
@@ -607,7 +666,7 @@ function Components.fullTier(w, h, opa, m, spec)
   })
   y = Components.valueRow(panel, inner, y + air, m, {
     caption = "RSSI",
-    text = Display.signalText,
+    text = signalFit(inner.w - Components.textWidth("RSSI", SMLSIZE) - m.pad),
     color = Display.detailColor,
   })
   y = Components.bar(panel, inner, y + m.gap, {
@@ -618,7 +677,7 @@ function Components.fullTier(w, h, opa, m, spec)
     -- is worse than no bar. The track stays so the row keeps its height.
     visible = Display.hasHeadroom,
   })
-  Components.grid(panel, inner, y + air, m, gridRows())
+  Components.grid(panel, inner, y + air, m, rows)
 
   lvgl.build(root)
 end
@@ -643,10 +702,13 @@ function Components.halfTier(w, h, opa, m, spec)
     + m.gap -- RSSI row to its bar
 
   -- The grid row is whole or absent, and it goes before either bar is
-  -- squeezed below the height at which it stops reading as a bar. That is
-  -- the degradation order the whole layout follows: lose a row, keep the
-  -- instruments.
+  -- squeezed below the height at which it stops reading as a bar -- or when
+  -- the zone is too narrow for its two columns; stacked it would eat the
+  -- bars' height, which is backwards. That is the degradation order the
+  -- whole layout follows: lose a row, keep the instruments.
+  local gridRow = { gridRows()[2] }
   local showGrid = (f.h - fixed - (m.sml + m.gap)) >= MIN_BAR * 2
+    and math.floor((inner.w - m.pad) / 2) >= gridMinColW(m, gridRow)
   if showGrid then
     fixed = fixed + m.sml + m.gap
   end
@@ -667,7 +729,7 @@ function Components.halfTier(w, h, opa, m, spec)
   })
   y = Components.valueRow(panel, inner, y + air, m, {
     caption = "RSSI",
-    text = Display.signalText,
+    text = signalFit(inner.w - Components.textWidth("RSSI", SMLSIZE) - m.pad),
     color = Display.detailColor,
   })
   y = Components.bar(panel, inner, y + m.gap, {
@@ -677,8 +739,7 @@ function Components.halfTier(w, h, opa, m, spec)
     visible = Display.hasHeadroom,
   })
   if showGrid then
-    local rows = gridRows()
-    Components.grid(panel, inner, y + m.gap, m, { rows[2] })
+    Components.grid(panel, inner, y + m.gap, m, gridRow)
   end
 
   lvgl.build(root)
@@ -710,10 +771,15 @@ function Components.thirdTier(w, h, opa, m, spec)
   local panel = Components.panel(root, f.panel, { opacity = opa })
 
   local y = Components.headerRow(panel, inner, pad, m, { detail = true })
+  -- What the signal may take is what the hero's number and caption leave.
+  local rightAvail = inner.w
+    - Components.textWidth("100", spec.heroFont)
+    - Components.textWidth("LQ %", SMLSIZE)
+    - m.pad * 2
   y = Components.hero(panel, inner, y + air, m, {
     font = spec.heroFont,
     h = heroH,
-    right = Display.signalText,
+    right = signalFit(rightAvail),
   })
   Components.bar(panel, inner, y + air, {
     h = barH,
@@ -788,7 +854,7 @@ function Components.compactTier(w, h, opa, m, spec)
   -- where the row affords it, the bare reading where carrying the floor would
   -- cost the widget its name -- a decorated half-width zone is exactly that
   -- wide, and an anonymous row of numbers is worth less than one dBm figure.
-  local signalW = Components.textWidth("-105 / -105 dBm", SMLSIZE)
+  local signalW = Components.textWidth(SIGNAL_SHORT, SMLSIZE)
   local signalText = Display.signalShortText
   local avail = textRight - textX - signalW - heroW - m.pad * 3
   if avail < Components.textWidth(BRAND_SHORT, SMLSIZE) then

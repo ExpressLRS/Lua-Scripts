@@ -62,14 +62,15 @@ local function statusLabel()
   }
 end
 
---- The preset cells sized for one tier; cellH overrides the tier's own for a
---- layout that sizes them to its zone. nil when the presets feature is off,
---- same as the builder.
-local function cells(f, cellH)
+--- The preset cells sized for one tier and fitted to the zone's width; cellH
+--- overrides the tier's own for a layout that sizes them to its zone. nil
+--- when the presets feature is off, same as the builder.
+local function cells(f, w, cellH)
   return VTXDisplay.buildCells({
     cellH = cellH or f.cellH,
     font = f.cells,
     rounded = CELL_ROUNDED,
+    w = w - 2 * lvgl.PAD_SMALL,
   })
 end
 
@@ -78,7 +79,7 @@ end
 local function cardRows(f, w)
   local heroStatus, hero = VTXDisplay.buildHero(f.hero)
   local rows = { VTXDisplay.buildHeader(w), heroStatus, hero }
-  rows[#rows + 1] = cells(f)
+  rows[#rows + 1] = cells(f, w)
   return rows
 end
 
@@ -97,7 +98,7 @@ function WidgetUI.buildSixth(w, h, opa)
   local bp = WidgetUI.breakpoints
   local f = WidgetUI.fonts.sixth
   if h >= bp.sixthStackH and w >= bp.sixthStackW then
-    local cellRow = cells(f)
+    local cellRow = cells(f, w)
     if cellRow then
       WidgetLayout.column(w, h, opa, {
         VTXDisplay.buildHeadline(w, f.status, { statusLabel() }),
@@ -150,7 +151,7 @@ function WidgetUI.buildSixth(w, h, opa)
     -- to a comfortable bubble around the font -- rather than the stacked
     -- tier's cell height.
     local fontH = select(2, lcd.sizeText("0", f.cells))
-    columns[#columns + 1] = cells(f, math.min(h - 2 * lvgl.PAD_SMALL, fontH + 2 * lvgl.PAD_SMALL))
+    columns[#columns + 1] = cells(f, w, math.min(h - 2 * lvgl.PAD_SMALL, fontH + 2 * lvgl.PAD_SMALL))
   end
 
   WidgetLayout.row(w, h, opa, columns)
@@ -163,7 +164,7 @@ function WidgetUI.buildQuarter(w, h, opa)
   local rows = {
     VTXDisplay.buildHeadline(w, f.status, { statusLabel() }),
   }
-  rows[#rows + 1] = cells(f)
+  rows[#rows + 1] = cells(f, w)
   WidgetLayout.column(w, h, opa, rows, {
     left = lvgl.PAD_SMALL,
     right = lvgl.PAD_SMALL,
