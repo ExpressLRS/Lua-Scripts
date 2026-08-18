@@ -31,17 +31,16 @@ WidgetUI.breakpoints = {
 
 -- The full tier's hero is a ladder, not a size: the tier serves every zone
 -- from the 137px half up to the 275px full, and the builder takes the largest
--- font the zone's height budget affords.
+-- font the zone's height budget affords. It tops out at DBLSIZE -- the
+-- display faces above it shout down every other reading on the card.
 WidgetUI.fonts = {
   compact = { hero = SMLSIZE },
   third = { hero = BOLD },
   half = { hero = BOLD },
-  full = { heroLadder = { XXLSIZE, DBLSIZE, MIDSIZE, BOLD } },
+  full = { heroLadder = { DBLSIZE, MIDSIZE, BOLD } },
 }
 
--- The card's corner radius and the cap on bar thickness, in this screen's
--- pixels.
-local ROUNDED = 6
+-- The cap on bar thickness, in this screen's pixels.
 local BAR_H = 6
 
 -- ============================================================================
@@ -57,7 +56,6 @@ function WidgetUI.buildCompact(w, h, opa)
   Components.compactTier(w, h, opa, m, {
     heroFont = WidgetUI.fonts.compact.hero,
     barH = BAR_H,
-    rounded = ROUNDED,
   })
 end
 
@@ -67,7 +65,6 @@ function WidgetUI.buildThird(w, h, opa)
   Components.thirdTier(w, h, opa, m, {
     heroFont = WidgetUI.fonts.third.hero,
     barH = BAR_H,
-    rounded = ROUNDED,
   })
 end
 
@@ -79,7 +76,6 @@ function WidgetUI.buildHalf(w, h, opa)
   Components.halfTier(w, h, opa, m, {
     heroFont = WidgetUI.fonts.half.hero,
     barH = BAR_H,
-    rounded = ROUNDED,
   })
 end
 
@@ -91,7 +87,6 @@ function WidgetUI.buildFull(w, h, opa)
   Components.fullTier(w, h, opa, m, {
     heroLadder = WidgetUI.fonts.full.heroLadder,
     barH = BAR_H,
-    rounded = ROUNDED,
   })
 end
 

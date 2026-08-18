@@ -39,9 +39,7 @@ WidgetUI.fonts = {
   full = { heroLadder = { DBLSIZE, MIDSIZE, BOLD } },
 }
 
--- The card's corner radius and the cap on bar thickness, in this screen's
--- pixels.
-local ROUNDED = 4
+-- The cap on bar thickness, in this screen's pixels.
 local BAR_H = 5
 
 -- ============================================================================
@@ -57,7 +55,6 @@ function WidgetUI.buildCompact(w, h, opa)
   Components.compactTier(w, h, opa, m, {
     heroFont = WidgetUI.fonts.compact.hero,
     barH = BAR_H,
-    rounded = ROUNDED,
   })
 end
 
@@ -67,7 +64,6 @@ function WidgetUI.buildThird(w, h, opa)
   Components.thirdTier(w, h, opa, m, {
     heroFont = WidgetUI.fonts.third.hero,
     barH = BAR_H,
-    rounded = ROUNDED,
   })
 end
 
@@ -79,7 +75,6 @@ function WidgetUI.buildFull(w, h, opa)
   Components.fullTier(w, h, opa, m, {
     heroLadder = WidgetUI.fonts.full.heroLadder,
     barH = BAR_H,
-    rounded = ROUNDED,
   })
 end
 

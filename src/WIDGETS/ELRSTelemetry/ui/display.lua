@@ -177,9 +177,15 @@ function Display.rssiText(sep)
   return table.concat({ tostring(rssi), sep or "", "dBm" })
 end
 
---- The hero label: a status when there is one, otherwise link quality.
-function Display.heroText()
-  return Display.statusText() or Display.lqText()
+--- Whether a status is standing, for the labels that swap places with the
+--- readings: the status label takes hasStatus, the reading it displaces takes
+--- noStatus, and the pair occupy the same rect so nothing reflows.
+function Display.hasStatus()
+  return Display.statusText() ~= nil
+end
+
+function Display.noStatus()
+  return Display.statusText() == nil
 end
 
 --- RSSI against the rate's rated floor, e.g. "-90 / -112 dBm".

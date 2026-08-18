@@ -44,17 +44,10 @@ local BRAND_SHORT = "ELRS"
 local MISMATCH = "MODEL MISMATCH!"
 local MISMATCH_SHORT = "MISMATCH!"
 
---- Side of one antenna cell. Half the row, so the pair sits at the status
---- dot's weight rather than the text's.
+--- Slot side of one antenna dot. Half the row, so the pair sits at the status
+--- LED's weight rather than the text's.
 local function antCell(m)
   return math.floor(m.sml / 2) + 1
-end
-
---- Radius of the status dot. Deliberately smaller than the row: an indicator
---- only has to be seen, and at half the row height it stops reading as a dot
---- and starts competing with the text beside it.
-local function dotRadius(m)
-  return math.floor(m.sml / 4) + 1
 end
 
 -- ============================================================================
@@ -165,8 +158,6 @@ end
 --- a card glued over the background while every widget beside it is painted on
 --- -- and a border also eats a pixel off each side of the content box, which is
 --- enough to make symmetric padding come out lopsided.
---- spec.rounded is the card's corner radius, on the fill alone: the container
---- draws nothing, so its square corners cannot show.
 function Components.panel(dst, rect, spec)
   local children = {}
   dst[#dst + 1] = {
@@ -178,7 +169,6 @@ function Components.panel(dst, rect, spec)
     color = COLOR_THEME_PRIMARY2,
     opacity = spec.opacity,
     filled = true,
-    rounded = spec.rounded,
   }
   dst[#dst + 1] = {
     type = lvgl.RECTANGLE,
@@ -259,6 +249,29 @@ function Components.bar(dst, rect, y, spec)
   return y + h
 end
 
+--- The LED in a fixed lane at the left of a row, returning the x where text
+--- starts. The lane is what everything after it measures from, so the dot's
+--- radius can be tuned without the readings shifting sideways.
+--- Shared with the tiers that have no header, so the LED sits at one x on
+--- every tier and a widget resized between them does not appear to move its
+--- indicator.
+function Components.ledLane(dst, rect, y, m)
+  local lane = math.floor(m.sml / 2) + 2
+  Components.led(dst, {
+    x = rect.x + math.floor(lane / 2),
+    -- Centred on the text's line box, not on the row. The row is the line box
+    -- plus padding, so centring in it drops the dot below the text it sits
+    -- beside -- close enough to look like a mistake rather than a choice.
+    y = y + math.floor(m.sml / 2),
+    -- Deliberately smaller than the lane. An indicator only has to be seen, and
+    -- at half the row height it stops reading as a dot and starts competing
+    -- with the text beside it.
+    radius = math.floor(m.sml / 4) + 1,
+    color = Display.ledColor,
+  })
+  return rect.x + lane + m.pad
+end
+
 --- The status LED. x and y are the centre, not a corner.
 function Components.led(dst, spec)
   dst[#dst + 1] = {
@@ -271,31 +284,33 @@ function Components.led(dst, spec)
   }
 end
 
---- Two antenna cells, the active one lit.
+--- Two antenna dots, the active one lit.
 --- The best pixels-per-bit element either reference widget has: it says which
 --- RF path is carrying the link in 20px, where a text row costs a whole line.
---- The second cell hides on a single-path receiver rather than sitting dark,
+--- The second dot hides on a single-path receiver rather than sitting dark,
 --- which would imply an antenna that is not there.
 --- The whole group hides on a mismatch, along with everything else the banner
---- displaces: the header is not wide enough to hold both, and cells left
+--- displaces: the header is not wide enough to hold both, and dots left
 --- behind are what "MODEL MISMATCH!" ends up printed across.
---- Sized off the status dot beside them rather than off the row: at row
---- height the two cells are solid blocks that take the eye before any reading
+--- Sized off the status LED beside them rather than off the row: at row
+--- height the two dots are solid blobs that take the eye before any reading
 --- does, which is backwards for a qualifier. As a pair of small marks they
---- read as the same class of thing the dot is.
+--- read as the same class of thing the LED is.
 function Components.antenna(dst, rect, y, m)
   local cell = antCell(m)
   local gap = m.gap
   local cx = rect.x
+  local r = math.floor(cell / 2)
   for i = 1, 2 do
     dst[#dst + 1] = {
-      type = lvgl.RECTANGLE,
-      x = cx + (i - 1) * (cell + gap),
-      -- Centred on the text line rather than pinned near its top, which is
-      -- where a cell shorter than the row would otherwise sit.
-      y = y + math.floor((m.sml - cell) / 2),
-      w = cell,
-      h = cell,
+      type = lvgl.CIRCLE,
+      -- Centre of the mark's slot in the pair's reserved width; the footprint
+      -- arithmetic stays square so antX and antW need no second opinion.
+      x = cx + (i - 1) * (cell + gap) + r,
+      -- Centred on the text line rather than pinned near its top, same as the
+      -- status LED at the row's other end.
+      y = y + math.floor(m.sml / 2),
+      radius = r,
       color = Display.antColor(i),
       filled = true,
       visible = (i == 2) and function()
@@ -310,8 +325,9 @@ end
 -- Blocks
 -- ============================================================================
 
---- The header row: the name and the RF mode on the left, the antenna cells
---- and the status dot pinned to the right corner. Returns the next free y.
+--- The header row: the status LED leading from the left, then the name and
+--- the RF mode, with the antenna cells pinned to the right corner. Returns
+--- the next free y.
 --- The name belongs here because the header is the module row -- what it is
 --- transmitting at, on which antenna -- so "ExpressLRS 250Hz" reads as a
 --- header and its value, the same grammar the grid's captioned cells use.
@@ -320,16 +336,15 @@ end
 --- A model mismatch takes the row. The binding is wrong, which is worth it --
 --- and the elements the banner displaces take the inverse visible rather than
 --- being left out, so the banner lands in the same rect and nothing below it
---- moves. The dot stays: it is the blink saying the same thing.
+--- moves. The LED stays: it is the blink saying the same thing.
 --- Only a mismatch gets a banner. "No telemetry" is what the widget shows on
 --- the bench with the quad switched off; shouting about a resting state
 --- teaches the eye to ignore the banner that matters.
 function Components.headerRow(dst, rect, y, m, spec)
   local h = m.sml + 4
-  local dotR = dotRadius(m)
+  local textX = Components.ledLane(dst, rect, y, m)
   local antW = 2 * antCell(m) + m.gap
-  local dotX = rect.x + rect.w - dotR
-  local antX = rect.x + rect.w - dotR * 2 - m.pad - antW
+  local antX = rect.x + rect.w - antW
 
   -- The mode's x is reserved against the widest rate name the tables carry,
   -- so switching from 25Hz to K1000Full never pushes what follows sideways.
@@ -338,17 +353,34 @@ function Components.headerRow(dst, rect, y, m, spec)
   -- the name from the reading, a tight gap leaves "ExpressLRS 250Hz" reading
   -- as one run-together word.
   local nameGap = m.pad * 2
-  local brand = Components.brandText(antX - m.pad - rect.x - modeW - nameGap)
-  local textX = rect.x
+  -- The dots get an "Ant" caption where the row has width to spare. Spare
+  -- means spare: only when the full name and the mode reserve still fit with
+  -- the caption in place, so a label never costs a reading its room. It hides
+  -- with the dots when the mismatch banner takes the row.
+  local antLeft = antX
+  local antCapW = Components.textWidth("Ant", SMLSIZE) + m.pad
+  if antX - antCapW - m.pad - textX - modeW - nameGap >= Components.textWidth(BRAND, SMLSIZE) then
+    antLeft = antX - antCapW
+    Components.label(dst, {
+      x = antLeft,
+      y = y,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = "Ant",
+      visible = Display.isNotMismatch,
+    })
+  end
+  local brand = Components.brandText(antLeft - m.pad - textX - modeW - nameGap)
+  local nameX = textX
   if brand then
-    textX = rect.x + Components.textWidth(brand, SMLSIZE) + nameGap
+    textX = textX + Components.textWidth(brand, SMLSIZE) + nameGap
   end
 
-  -- The banner runs from wherever the readings start to the dot, because the
-  -- cells it displaces hide with it. Shortened rather than squeezed: a banner
-  -- is no use clipped, and "MISMATCH!" is unambiguous under a name that has
-  -- just said which link it is about.
-  local bannerLimit = rect.x + rect.w - dotR * 2 - m.pad
+  -- The banner runs from wherever the readings start to the end of the row,
+  -- because the cells it displaces hide with it. Shortened rather than
+  -- squeezed: a banner is no use clipped, and "MISMATCH!" is unambiguous
+  -- under a name that has just said which link it is about.
+  local bannerLimit = rect.x + rect.w
   local banner = MISMATCH
   if Components.textWidth(banner, BOLD) > bannerLimit - textX then
     banner = MISMATCH_SHORT
@@ -359,12 +391,12 @@ function Components.headerRow(dst, rect, y, m, spec)
   local nameHides = Components.textWidth(banner, BOLD) > bannerLimit - textX
   local bannerX = textX
   if nameHides then
-    bannerX = rect.x
+    bannerX = nameX
   end
 
   if brand then
     Components.label(dst, {
-      x = rect.x,
+      x = nameX,
       y = y,
       font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
@@ -395,15 +427,6 @@ function Components.headerRow(dst, rect, y, m, spec)
   })
 
   Components.antenna(dst, { x = antX }, y, m)
-  Components.led(dst, {
-    x = dotX,
-    -- Centred on the text's line box, not on the row. The row is the line box
-    -- plus padding, so centring in it drops the dot below the text it sits
-    -- beside -- close enough to look like a mistake rather than a choice.
-    y = y + math.floor(m.sml / 2),
-    radius = dotR,
-    color = Display.ledColor,
-  })
   return y + h
 end
 
@@ -422,8 +445,11 @@ function Components.hero(dst, rect, y, m, spec)
     text = Display.lqHeroText,
   })
   -- Small type beside a large number sits on its baseline, not its top:
-  -- labels position from the top, so the caption drops by the difference.
-  local drop = math.max(0, spec.h - m.sml)
+  -- labels position from the top, so the caption drops by the difference --
+  -- four fifths of it, because line boxes carry descender room in proportion
+  -- to the font, and aligning box bottoms sinks the small text below the
+  -- shared baseline by the difference in descent.
+  local drop = math.max(0, math.floor((spec.h - m.sml) * 4 / 5))
   Components.label(dst, {
     x = rect.x + Components.textWidth("100", spec.font) + m.pad,
     y = y + drop,
@@ -532,9 +558,11 @@ end
 --- carry the drawing there is nothing screen-specific left in it but the
 --- fonts -- and five copies of the vertical arithmetic is exactly the drift
 --- the per-screen split is supposed to avoid.
---- Height left over after the fixed rows goes into the bars and the air
---- between blocks, never to the bottom: a panel with a hole in it is what
---- "looks basic" means.
+--- The header hugs its hero -- a title floating a third of a card above its
+--- figure reads as two cards -- and the block gaps are capped, so the content
+--- reads as one column from the top and whatever height the zone has to
+--- spare rests at the card's foot, the same shape the VTX Admin card beside
+--- it takes.
 --- LQ gets the hero and the first bar because the uplink is what you fly on;
 --- the RSSI row under it keeps the rated floor in the text and draws its bar
 --- against that floor, so a full LQ bar over a half-full RSSI bar still reads
@@ -543,32 +571,35 @@ function Components.fullTier(w, h, opa, m, spec)
   local f = Components.frame(w, h, m)
   local pad, inner = f.pad, f.inner
 
-  -- Everything except the hero, the two bars and the air between blocks. This
-  -- has to match what the blocks below actually consume, AIR_GAPS included,
-  -- or the last row walks off the bottom of the panel.
-  local AIR_GAPS = 3
+  local gridH = m.sml * 2 + m.gap
   local MIN_BAR = 4
+  -- Everything except the hero and the two bars. This has to match what the
+  -- blocks below actually consume, or the last row walks off the bottom of
+  -- the panel; the bar-to-RSSI air and the footer seam both bottom out at
+  -- m.gap, which is what the ladder budget reserves for them.
   local fixedNoHero = pad * 2
     + (m.sml + 4) -- header row
+    + m.gap -- header to hero
     + m.gap -- hero to LQ bar
     + m.sml -- RSSI row
     + m.gap -- RSSI row to its bar
-    + (m.sml * 2 + m.gap) -- grid
-  local heroFont, heroH =
-    Components.heroFromLadder(m, spec.heroLadder, f.h - fixedNoHero - MIN_BAR * 2 - AIR_GAPS * m.gap)
+    + gridH
+  local heroFont, heroH = Components.heroFromLadder(m, spec.heroLadder, f.h - fixedNoHero - MIN_BAR * 2 - m.gap * 2)
 
   local slack = f.h - fixedNoHero - heroH
   -- A gentle fraction of the slack: the tier also serves zones barely over
   -- the 1/2 breakpoint, where a generous cut of a small slack makes the bars
   -- thicker than the rows they sit under. The tall 1/1 still reaches the cap.
   local barH = math.max(MIN_BAR, math.min(math.floor(slack * 0.12), spec.barH))
-  local air = math.max(m.gap, math.floor((slack - barH * 2) / AIR_GAPS))
+  -- Capped: a block gap only has to separate its neighbours, and past a line
+  -- height it stops reading as a gap and starts reading as a hole.
+  local air = math.max(m.gap, math.min(math.floor(slack / 6), m.sml))
 
   local root = {}
-  local panel = Components.panel(root, f.panel, { opacity = opa, rounded = spec.rounded })
+  local panel = Components.panel(root, f.panel, { opacity = opa })
 
   local y = Components.headerRow(panel, inner, pad, m, {})
-  y = Components.hero(panel, inner, y + air, m, { font = heroFont, h = heroH })
+  y = Components.hero(panel, inner, y + m.gap, m, { font = heroFont, h = heroH })
   y = Components.bar(panel, inner, y + m.gap, {
     h = barH,
     pct = Display.lqPct,
@@ -625,7 +656,7 @@ function Components.halfTier(w, h, opa, m, spec)
   local air = math.max(0, math.floor((slack - barH * 2) / AIR_GAPS))
 
   local root = {}
-  local panel = Components.panel(root, f.panel, { opacity = opa, rounded = spec.rounded })
+  local panel = Components.panel(root, f.panel, { opacity = opa })
 
   local y = Components.headerRow(panel, inner, pad, m, { detail = true })
   y = Components.hero(panel, inner, y + air, m, { font = spec.heroFont, h = heroH })
@@ -676,7 +707,7 @@ function Components.thirdTier(w, h, opa, m, spec)
   local air = math.max(0, math.floor((slack - barH) / AIR_GAPS))
 
   local root = {}
-  local panel = Components.panel(root, f.panel, { opacity = opa, rounded = spec.rounded })
+  local panel = Components.panel(root, f.panel, { opacity = opa })
 
   local y = Components.headerRow(panel, inner, pad, m, { detail = true })
   y = Components.hero(panel, inner, y + air, m, {
@@ -707,10 +738,11 @@ end
 --- widget has.
 --- The name and the mode cell read as one phrase from the left -- the same
 --- grammar as the header's "ExpressLRS 250Hz", in one font and one colour --
---- and the link readings pack the right margin: LQ, then the dBm pair, then
---- the status dot in the corner, where every taller tier puts it.
---- The hero label falls back to the status text: there is no header here to
---- carry a banner.
+--- and the link readings pack the right margin: LQ, then the dBm pair at the
+--- edge every taller tier gives it.
+--- The LED keeps its lane, so a link that is down still says so on the tier
+--- with no room to say it in words, and the hero label falls back to the
+--- status text: there is no header here to carry a banner.
 function Components.compactTier(w, h, opa, m, spec)
   local f = Components.frame(w, h, m)
   local pad, inner = f.pad, f.inner
@@ -740,39 +772,34 @@ function Components.compactTier(w, h, opa, m, spec)
   local drop = math.max(0, heroH - m.sml)
 
   local root = {}
-  local panel = Components.panel(root, f.panel, { opacity = opa, rounded = spec.rounded })
+  local panel = Components.panel(root, f.panel, { opacity = opa })
   -- With no bar the row has the panel to itself, so it centres; with one it
   -- keeps the top and the bar takes the slack.
   local y = vpad + (barH > 0 and 0 or math.floor(air / 2))
 
-  -- The status dot holds the right corner, as it does on every taller tier.
-  local dotR = dotRadius(m)
-  local right = inner.x + inner.w
-  Components.led(panel, {
-    x = right - dotR,
-    -- Centred on the dropped small-text line the readings beside it sit on.
-    y = y + drop + math.floor(m.sml / 2),
-    radius = dotR,
-    color = Display.ledColor,
-  })
-  local textRight = right - dotR * 2 - m.pad
-
-  local textX = inner.x
-  local signalW = Components.textWidth("-105 / -105 dBm", SMLSIZE)
+  -- The LED sits beside the dropped small text, not beside the hero, so it
+  -- centres on the dropped line: undropped it rides high of the reading by
+  -- the whole baseline offset, which at this size is plainly visible.
+  local textX = Components.ledLane(panel, inner, y + drop, m)
+  local textRight = inner.x + inner.w
   local detailW = Components.textWidth("K1000Full 2000mW", SMLSIZE)
-  -- The hero box is reserved against the widest string the label can ever
-  -- carry -- the statuses, not just the reading. A fixed-width box that the
-  -- live text can outgrow would wrap rather than clip, and take the row with
-  -- it; "Model Mismatch" wrapping over the bar is exactly what this pays for.
-  local heroW = math.max(
-    Components.textWidth("LQ 100%", spec.heroFont),
-    Components.textWidth("No CRSF module", spec.heroFont),
-    Components.textWidth("Model Mismatch", spec.heroFont)
-  )
-  -- Six pads: the name and the detail advance by two each, and the signal box
-  -- keeps two off the hero. Reserving fewer lets the advances eat into the
-  -- hero's own reserve.
-  local avail = textRight - textX - signalW - heroW - m.pad * 6
+  local heroW = Components.textWidth("LQ 100%", spec.heroFont)
+  -- The signal has its own fit ladder: the reading against the rated floor
+  -- where the row affords it, the bare reading where carrying the floor would
+  -- cost the widget its name -- a decorated half-width zone is exactly that
+  -- wide, and an anonymous row of numbers is worth less than one dBm figure.
+  local signalW = Components.textWidth("-105 / -105 dBm", SMLSIZE)
+  local signalText = Display.signalShortText
+  local avail = textRight - textX - signalW - heroW - m.pad * 3
+  if avail < Components.textWidth(BRAND_SHORT, SMLSIZE) then
+    local shortW = Components.textWidth("-105dBm", SMLSIZE)
+    local shortAvail = textRight - textX - shortW - heroW - m.pad * 3
+    if shortAvail >= Components.textWidth(BRAND_SHORT, SMLSIZE) then
+      signalW = shortW
+      signalText = Display.rssiText
+      avail = shortAvail
+    end
+  end
   local showDetail = avail >= detailW + m.pad
   if showDetail then
     avail = avail - detailW - m.pad
@@ -805,9 +832,11 @@ function Components.compactTier(w, h, opa, m, spec)
     })
     textX = textX + detailW + m.pad * 2
   end
-  -- LQ's box spans the middle, right-aligned against the dBm pair: normally
-  -- only the reserved right end of it is inked, and a status -- the one long
-  -- string this label ever carries -- grows leftward across the row the
+  -- The reading and the status are two labels swapping over one spot, the
+  -- same mechanism as the header's mismatch banner. The reading keeps a
+  -- reserved box, right-aligned against the dBm pair; the status label is
+  -- content-sized -- a fixed box it could outgrow would wrap rather than
+  -- clip, and take the row with it -- and grows rightward across the row the
   -- hidden readings have just emptied.
   local heroRight = textRight - signalW - m.pad * 2
   Components.label(panel, {
@@ -816,8 +845,16 @@ function Components.compactTier(w, h, opa, m, spec)
     w = math.max(1, heroRight - textX),
     align = RIGHT,
     font = spec.heroFont,
+    text = Display.lqText,
+    visible = Display.noStatus,
+  })
+  Components.label(panel, {
+    x = textX,
+    y = y,
+    font = spec.heroFont,
     color = Display.heroColor,
-    text = Display.heroText,
+    text = Display.statusText,
+    visible = Display.hasStatus,
   })
   Components.label(panel, {
     x = textRight - signalW,
@@ -826,12 +863,15 @@ function Components.compactTier(w, h, opa, m, spec)
     align = RIGHT,
     font = SMLSIZE,
     color = Display.detailColor,
-    text = Display.signalShortText,
+    text = signalText,
     visible = Display.isNotMismatch,
   })
 
   if barH > 0 then
-    Components.bar(panel, inner, vpad + heroH + air, {
+    -- Tucked under the row rather than sitting on the panel's floor: the bar
+    -- qualifies the readings above it, and a zone taller than the minimum
+    -- leaves its spare height under the bar, not between them.
+    Components.bar(panel, inner, vpad + heroH + math.min(air, m.gap * 2), {
       h = barH,
       pct = Display.headroomPct,
       color = Display.headroomBarColor,

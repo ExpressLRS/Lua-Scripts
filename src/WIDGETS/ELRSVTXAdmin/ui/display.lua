@@ -21,9 +21,7 @@ local WidgetLayout = {}
 --- costs more height than it has. Pass a table to keep the horizontal padding
 --- while trimming the vertical: the left edge is what a widget in the zone
 --- above or beside lines its own text up against, so it is not the one to give.
---- rounded is the card's corner radius, on the fill alone: the box draws
---- nothing, so its square corners cannot show.
-function WidgetLayout.column(w, h, opa, children, pad, rounded)
+function WidgetLayout.column(w, h, opa, children, pad)
   lvgl.build({
     {
       type = lvgl.RECTANGLE,
@@ -34,7 +32,6 @@ function WidgetLayout.column(w, h, opa, children, pad, rounded)
       color = COLOR_THEME_PRIMARY2,
       opacity = opa,
       filled = true,
-      rounded = rounded,
     },
     {
       type = lvgl.BOX,
@@ -51,7 +48,7 @@ function WidgetLayout.column(w, h, opa, children, pad, rounded)
   })
 end
 
-function WidgetLayout.row(w, h, opa, children, rounded)
+function WidgetLayout.row(w, h, opa, children)
   lvgl.build({
     {
       type = lvgl.RECTANGLE,
@@ -62,7 +59,6 @@ function WidgetLayout.row(w, h, opa, children, rounded)
       color = COLOR_THEME_PRIMARY2,
       opacity = opa,
       filled = true,
-      rounded = rounded,
     },
     {
       type = lvgl.BOX,
@@ -151,9 +147,24 @@ function VTXDisplay.pitHeaderColor()
   return VTXAdmin.state.pitmode and RED or COLOR_THEME_SECONDARY1
 end
 
---- The power level on its own, for the power row's right end.
-function VTXDisplay.powerValueText()
-  return tostring(VTXAdmin.state.power)
+--- The power level in the terse form that rides beside the channel on the
+--- one-line tiers, e.g. "P2". "" when no power is set: ExpressLRS cannot
+--- report one, and a bare "P" would read as a reading stuck mid-arrival.
+function VTXDisplay.powerShort()
+  if not VTXAdmin.hasPower() then
+    return ""
+  end
+  return table.concat({ "P", VTXAdmin.state.power })
+end
+
+--- The same reading said in full, e.g. "Power 2", for the hero row -- at that
+--- size the terse form reads as part of the channel rather than as its own
+--- reading.
+function VTXDisplay.powerLong()
+  if not VTXAdmin.hasPower() then
+    return ""
+  end
+  return table.concat({ "Power ", VTXAdmin.state.power })
 end
 
 --- The header row: the widget's name in the muted caption colour on the left,
@@ -192,89 +203,110 @@ function VTXDisplay.buildHeader(w)
   }
 end
 
---- The hero pair for a flex column: the status while the VTX is quiet, the
---- band and channel in the tier's display font once it is tuned. Two children
---- to append in order -- a hidden flex child costs no height, so only the live
---- one takes a row.
+--- The hero pair for a flex column: the status while the VTX is quiet, and
+--- once it is tuned the band and channel in the tier's display font with
+--- "Power 2" sat on its baseline beside it. Two children to append in order
+--- -- a hidden flex child costs no height, so only the live one takes a row.
+--- The status takes the same display font as the reading it stands in for:
+--- the two swap over one row, and at two sizes everything below them jumps
+--- the moment the VTX loads.
+--- A plain box with absolute children rather than a flex row: small type
+--- beside a large number sits on its baseline, not its top, and flex has no
+--- way to say that. Same mechanics as the telemetry hero's caption -- the
+--- power's x is reserved against the widest reading, so it never moves when
+--- the channel changes.
 function VTXDisplay.buildHero(font)
+  local heroH = select(2, lcd.sizeText("0", font))
+  -- Four fifths of the height difference, not all of it: line boxes carry
+  -- descender room in proportion to the font, so aligning box bottoms sinks
+  -- the small text below the shared baseline by the difference in descent.
+  local drop = math.max(0, math.floor((heroH - select(2, lcd.sizeText("0", SMLSIZE))) * 4 / 5))
   return {
     type = lvgl.LABEL,
     align = LEFT,
-    font = BOLD,
-    color = COLOR_THEME_PRIMARY1,
+    font = font,
+    -- The muted theme colour, not the text primary: at the hero size a black
+    -- "Loading..." reads as the reading itself, and a status is background.
+    color = COLOR_THEME_SECONDARY1,
     text = VTXDisplay.statusText,
     visible = VTXDisplay.showStatus,
   }, {
-    type = lvgl.LABEL,
-    align = LEFT,
-    font = font,
-    color = VTXDisplay.heroColor,
-    text = VTXDisplay.bandChannel,
+    type = lvgl.BOX,
+    h = heroH,
     visible = VTXDisplay.showChannel,
+    children = {
+      {
+        type = lvgl.LABEL,
+        x = 0,
+        y = 0,
+        font = font,
+        color = VTXDisplay.heroColor,
+        text = VTXDisplay.bandChannel,
+      },
+      {
+        type = lvgl.LABEL,
+        x = (lcd.sizeText("R8", font)) + lvgl.PAD_MEDIUM,
+        y = drop,
+        font = SMLSIZE,
+        color = COLOR_THEME_SECONDARY1,
+        text = VTXDisplay.powerLong,
+      },
+    },
   }
 end
 
---- The 6POS presets as a row of six equal cells, the latched one lit in the
---- accent. The row is always exactly six cells and never reflows: a preset
---- without a band shows "--" in its cell rather than giving the cell up, and
---- the position is the cell's place in the row, so the labels drop the "n:"
---- prefix the text cheatsheet needed.
---- The active cell recolours through closures -- the cells themselves never
---- move or resize, which keeps the row to zero layout work per frame.
---- spec.w is the width the row may span; spec.cellH, spec.font and
---- spec.rounded come from the screen file's own scale.
---- Returns nil when the presets feature is off or no module is present, the
---- same build-time gates the text cheatsheet had; the runtime module gate
---- rides the row's visible.
+--- The 6POS presets as a row of six fixed-width cells, the latched one lit in
+--- the accent. Always exactly six cells: an unset preset shows "--" rather
+--- than giving its cell up, so the position is the cell's place in the row.
+--- Everything live rides in closures -- colours and label text -- so the
+--- cells themselves never move or resize, and presets edited in another
+--- instance's editor show up without a rebuild.
+--- spec.cellH, spec.font and spec.rounded come from the screen file's scale.
+--- Returns nil when the presets feature is off or no module is present.
 function VTXDisplay.buildCells(spec)
-  if not VTXAdmin.hasModule() then
+  if not (VTXAdmin.hasModule() and PresetsStorage.enabled) then
     return nil
   end
-  if not PresetsStorage.enabled then
-    return nil
-  end
-  -- The mock's own cell gap. Tighter than the theme paddings, and fixed: six
-  -- cells only read as one control when the gaps between them are beats, not
-  -- breaks.
-  local gap = 4
-  local cellW = math.floor((spec.w - 5 * gap) / 6)
   local font = spec.font or SMLSIZE
-  local textY = math.floor((spec.cellH - select(2, lcd.sizeText("0", font))) / 2)
+  -- One width for all six, measured against the widest label a cell can carry.
+  local cellW = math.max((lcd.sizeText("R8", font)), (lcd.sizeText("--", font))) + 2 * lvgl.PAD_SMALL
+  local function isActive(idx)
+    return PresetsStorage.latch.lastPos == idx
+  end
+  local function cellText(idx)
+    local p = PresetsStorage.items[idx]
+    if p.band == 0 then
+      return "--"
+    end
+    return table.concat({ VTXAdmin.BAND_LETTERS[p.band] or "?", p.channel })
+  end
   local cells = {}
-  for i = 1, 6 do
-    local idx = i
-    cells[#cells + 1] = {
+  for idx = 1, 6 do
+    cells[idx] = {
       type = lvgl.RECTANGLE,
       w = cellW,
       h = spec.cellH,
       filled = true,
       rounded = spec.rounded,
       color = function()
-        return (PresetsStorage.latch.lastPos == idx) and COLOR_THEME_FOCUS or COLOR_THEME_DISABLED
+        return isActive(idx) and COLOR_THEME_FOCUS or COLOR_THEME_DISABLED
       end,
-      -- The inactive cells sit back at part opacity so the lit one carries
-      -- the row; opacity is background-only on a rectangle, so the label
-      -- inside keeps its full weight either way.
+      -- Part opacity is background-only on a rectangle, so the inactive cells
+      -- sit back while their labels keep full weight.
       opacity = function()
-        return (PresetsStorage.latch.lastPos == idx) and 255 or 90
+        return isActive(idx) and 255 or 90
       end,
       children = {
         {
           type = lvgl.LABEL,
-          x = 0,
-          y = math.max(0, textY),
           w = cellW,
-          align = CENTER,
+          align = CENTER + VCENTER,
           font = font,
           color = function()
-            return (PresetsStorage.latch.lastPos == idx) and COLOR_THEME_PRIMARY2 or COLOR_THEME_SECONDARY1
+            return isActive(idx) and COLOR_THEME_PRIMARY2 or COLOR_THEME_SECONDARY1
           end,
           text = function()
-            local p = PresetsStorage.items[idx]
-            if p.band == 0 then
-              return "--"
-            end
-            return table.concat({ VTXAdmin.BAND_LETTERS[p.band] or "?", p.channel })
+            return cellText(idx)
           end,
         },
       },
@@ -284,59 +316,27 @@ function VTXDisplay.buildCells(spec)
     type = lvgl.BOX,
     flexFlow = lvgl.FLOW_ROW,
     borderPad = 0,
-    flexPad = gap,
+    -- Tighter than the theme paddings: six cells read as one control when the
+    -- gaps between them are beats, not breaks.
+    flexPad = 4,
     align = LEFT,
     visible = VTXAdmin.hasModule,
     children = cells,
   }
 end
 
---- The power row at the card's foot: the caption on the left, the level
---- right-aligned. Same box shape as the header, and hidden whole -- a flex
---- column drops a hidden child rather than reserving its line, so a VTX
---- reporting no power closes the row instead of leaving a gap.
-function VTXDisplay.buildPowerRow(w)
-  local cw = w - 2 * lvgl.PAD_SMALL
-  return {
-    type = lvgl.BOX,
-    w = cw,
-    visible = VTXAdmin.hasPower,
-    children = {
-      {
-        type = lvgl.LABEL,
-        x = 0,
-        y = 0,
-        font = SMLSIZE,
-        color = COLOR_THEME_SECONDARY1,
-        text = "Power",
-      },
-      {
-        type = lvgl.LABEL,
-        x = 0,
-        y = 0,
-        w = cw,
-        align = RIGHT,
-        font = SMLSIZE,
-        color = COLOR_THEME_PRIMARY1,
-        text = VTXDisplay.powerValueText,
-      },
-    },
-  }
-end
-
---- The headline row: the widget's name, then the band and channel, on one line
---- at one size. For the tiers with no row to spare for a title of its own.
---- Both at one size on purpose. The name is a caption in the muted theme colour
---- and the reading takes the accent, which is what lets them share a line
---- without competing -- where two type sizes in one breath read as two
---- importances, and a name shrunk beside its own value reads as an afterthought.
+--- The headline row: the widget's name, then the band and channel, on one line.
+--- For the tiers with no row to spare for a title of its own. The name keeps
+--- the small muted caption type every other tier titles itself with; only the
+--- reading takes the tier's font and the accent, so the emphasis falls on the
+--- reading at every widget size.
 --- extras are trailing labels, for a tier with nowhere else to put them.
 function VTXDisplay.buildHeadline(w, font, extras)
   local children = {
     {
       type = lvgl.LABEL,
       align = LEFT,
-      font = font,
+      font = SMLSIZE,
       color = COLOR_THEME_SECONDARY1,
       text = "VTX Admin",
     },
@@ -346,6 +346,14 @@ function VTXDisplay.buildHeadline(w, font, extras)
       font = font,
       color = VTXDisplay.heroColor,
       text = VTXDisplay.bandChannel,
+      visible = VTXDisplay.showChannel,
+    },
+    {
+      type = lvgl.LABEL,
+      align = LEFT,
+      font = SMLSIZE,
+      color = COLOR_THEME_SECONDARY1,
+      text = VTXDisplay.powerShort,
       visible = VTXDisplay.showChannel,
     },
   }
