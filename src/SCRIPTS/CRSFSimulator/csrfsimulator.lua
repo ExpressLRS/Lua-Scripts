@@ -99,7 +99,6 @@ local CRSF = {
   ADDRESS_HANDSET = 0xEA, -- EdgeTX's official handset address
   ADDRESS_RX = 0xEC,
   ADDRESS_TX = 0xEE,
-  ADDRESS_HANDSET_ELRS = 0xEF, -- ELRS-custom Lua device address, not standard CRSF
 
   -- Field types0
   UINT8 = 0,
