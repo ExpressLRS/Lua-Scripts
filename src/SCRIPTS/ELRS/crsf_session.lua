@@ -36,7 +36,7 @@ CRSFSession.__index = CRSFSession
 --- Create a session.
 -- @param opts  table with:
 --   deviceId          target device address (default ADDRESS_TX)
---   handsetId         reply-to address (default ADDRESS_HANDSET_ELRS)
+--   handsetId         reply-to address (default ADDRESS_HANDSET)
 --   responseTimeout   fixed read-retry deadline in ticks; when omitted it is
 --                     derived per device: 50 for the local ELRS TX, 500 for
 --                     remote devices relayed over the air link
@@ -56,7 +56,7 @@ function CRSFSession.new(opts)
   return setmetatable({
     -- Public facts
     deviceId = opts.deviceId or crsf.CONST.ADDRESS_TX,
-    handsetId = opts.handsetId or crsf.CONST.ADDRESS_HANDSET_ELRS,
+    handsetId = opts.handsetId or crsf.CONST.ADDRESS_HANDSET,
     deviceName = nil,
     isElrsTx = nil,
     fieldsCount = 0,
@@ -137,7 +137,6 @@ function CRSFSession:setDevice(device)
   self.deviceName = device.name
   self.fieldsCount = device.fieldCount
   self.isElrsTx = device.isElrs and device.id == crsf.CONST.ADDRESS_TX or nil
-  self.handsetId = self.isElrsTx and crsf.CONST.ADDRESS_HANDSET_ELRS or crsf.CONST.ADDRESS_HANDSET
   local st = self.status
   st.flags = 0
   st.connected = nil
@@ -669,9 +668,8 @@ function CRSFSession:tick()
 
   if self._trackStatus and now > self._nextStatusAt then
     if self.isElrsTx then
-      -- isElrsTx guarantees deviceId/handsetId are ADDRESS_TX and
-      -- ADDRESS_HANDSET_ELRS here (see setDevice), the addressing
-      -- requestElrsStatus() hardcodes.
+      -- isElrsTx guarantees deviceId is ADDRESS_TX here (see setDevice),
+      -- the addressing requestElrsStatus() hardcodes.
       crsf:requestElrsStatus()
     else
       self.status.receivedPackets = nil

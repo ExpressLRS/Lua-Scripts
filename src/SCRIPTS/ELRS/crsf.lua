@@ -27,7 +27,6 @@ CRSF.CONST = {
   ADDRESS_HANDSET = 0xEA, -- EdgeTX's official handset address
   ADDRESS_RX = 0xEC,
   ADDRESS_TX = 0xEE,
-  ADDRESS_HANDSET_ELRS = 0xEF, -- ELRS-custom Lua device address, not standard CRSF
 
   -- Frame types
   FRAMETYPE_DEVICE_PING = 0x28,
@@ -257,10 +256,10 @@ function CRSF:decodeElrsStatus(data)
   }
 end
 
---- ELRS 1.x signature: an inbound PARAMETER_WRITE addressed to the official
--- handset address from the TX module. 3.x+ answers on ADDRESS_HANDSET_ELRS and
--- never writes to the handset. Reads data[1] (the destination) deliberately --
--- unlike the decoders above, which leave gating on the source to the caller.
+--- ELRS 1.x signature: an inbound PARAMETER_WRITE addressed to the handset
+-- from the TX module; 3.x+ never writes to the handset. Reads data[1] (the
+-- destination) deliberately -- unlike the decoders above, which leave gating
+-- on the source to the caller.
 -- @param data  array of byte values
 -- @return true when the frame matches the 1.x signature, nil otherwise
 function CRSF:isElrsV1Frame(data)
@@ -280,7 +279,7 @@ end
 --- Request ELRS status from the TX module (PARAMETER_WRITE with fieldId=0).
 -- The module answers with an ELRS_STATUS frame carrying its warning flags.
 function CRSF:requestElrsStatus()
-  CRSF.push(CRSF.CONST.FRAMETYPE_PARAMETER_WRITE, { CRSF.CONST.ADDRESS_TX, CRSF.CONST.ADDRESS_HANDSET_ELRS, 0, 0 })
+  CRSF.push(CRSF.CONST.FRAMETYPE_PARAMETER_WRITE, { CRSF.CONST.ADDRESS_TX, CRSF.CONST.ADDRESS_HANDSET, 0, 0 })
 end
 
 --- Send a COMMAND bind request. Addressed to the TX module it enters bind
