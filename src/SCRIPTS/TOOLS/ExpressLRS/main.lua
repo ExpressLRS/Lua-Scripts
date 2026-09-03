@@ -178,8 +178,8 @@ local function run(event, touchState)
   session:drain()
   session:tick()
 
-  if session.v1Detected then
-    UI.handleUnsupported()
+  if session.v1Detected or session.unsupportedElrs then
+    UI.handleUnsupported(session.unsupportedElrs)
     return 0
   end
 
