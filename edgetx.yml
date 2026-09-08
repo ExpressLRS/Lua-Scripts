@@ -1,0 +1,61 @@
+package:
+  id: github.com/ExpressLRS/Lua-Scripts
+  name: ExpressLRS
+  description: ExpressLRS Lua scripts and widgets
+  authors:
+    - name: ExpressLRS Contributors
+      email: info@expresslrs.org
+  urls:
+    - name: Homepage
+      url: "https://www.expresslrs.org"
+    - name: Repository
+      url: "https://github.com/ExpressLRS/Lua-Scripts"
+  screenshots:
+    - screenshots/tool_main.png
+    - screenshots/tool_main_bw.png
+    - screenshots/tool_bind.png
+    - screenshots/tool_bind_bw.png
+    - screenshots/widget_telemetry_fullscren.png
+    - screenshots/widget_vtxadmin_fullscreen.png
+    - screenshots/widgets.png
+  keywords:
+    - expresslrs
+    - elrs
+    - telemetry
+  license: GPL-3.0-only
+  source_dir: src
+  min_edgetx_version: "2.11.6"
+
+libraries:
+  - name: ELRS
+    path: SCRIPTS/ELRS
+
+  - name: CRSFSimulator
+    path: SCRIPTS/CRSFSimulator
+    dev: true
+
+tools:
+  - name: ExpressLRS
+    path: SCRIPTS/TOOLS/ExpressLRS
+    depends:
+      - ELRS
+
+  - name: ExpressLRSBind
+    path: SCRIPTS/TOOLS/ExpressLRSBind
+    depends:
+      - ELRS
+    exclude:
+      - history.txt
+
+widgets:
+  - name: ELRSTelemetry
+    path: WIDGETS/ELRSTelemetry
+    depends:
+      - ELRS
+
+  - name: ELRSVTXAdmin
+    path: WIDGETS/ELRSVTXAdmin
+    depends:
+      - ELRS
+    exclude:
+      - presets.txt

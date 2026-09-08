@@ -1,0 +1,4 @@
+[submodule "edgetx-lua-stdlib"]
+	path = edgetx-lua-stdlib
+	url = https://github.com/jurgelenas/edgetx-lua-stdlib.git
+	branch = edgetx-2.12

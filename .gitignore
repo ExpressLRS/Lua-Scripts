@@ -1,0 +1,6 @@
+*.luac
+src/WIDGETS/ELRSVTXAdmin/presets.txt
+src/SCRIPTS/TOOLS/ExpressLRSBind/history.txt
+bin/
+.claude/plans/
+TODO.md

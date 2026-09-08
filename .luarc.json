@@ -1,0 +1,16 @@
+{
+  "runtime.version": "Lua 5.3",
+  "runtime.builtin": {
+    "os": "disable",
+    "debug": "disable",
+    "package": "disable",
+    "coroutine": "disable",
+    "utf8": "disable",
+    "io": "disable",
+    "bit32": "disable"
+  },
+  "workspace.library": ["edgetx-lua-stdlib"],
+  "workspace.ignoreDir": ["bin", "edgetx-lua-stdlib"],
+  "workspace.checkThirdParty": false,
+  "diagnostics.disable": ["lowercase-global"]
+}
