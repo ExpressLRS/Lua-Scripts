@@ -62,6 +62,7 @@ function CRSFSession.new(opts)
     fieldsCount = 0,
     devices = {},
     command = nil, -- the command field driving the active popup
+    commandAt = 0, -- tick of the click that started it (UI grace timers)
     -- Link status; table identity is stable, only keys change
     status = { flags = 0, warning = "" },
     -- Read-and-clear flags for the app
@@ -91,6 +92,8 @@ function CRSFSession.new(opts)
     _nextStatusAt = 0,
     _nextPingAt = 0,
     _lastWriteAt = 0,
+    -- Command step the radio's single output slot refused; tick() retries it
+    _pendingFrame = nil,
 
     -- Write queue: encoded frames between head and tail, paced by tick()
     _writeQueue = {},
@@ -109,9 +112,9 @@ function CRSFSession.new(opts)
   }, CRSFSession)
 end
 
--- Read-retry deadline for PARAMETER_READ: a fixed opts.responseTimeout wins,
--- otherwise 0.5 s for the local TX module, 5 s for remote devices relayed
--- over the air link.
+-- Response deadline for a PARAMETER_READ retry and for the first re-query of
+-- a command step: a fixed opts.responseTimeout wins, otherwise 0.5 s for the
+-- local TX module, 5 s for remote devices relayed over the air link.
 function CRSFSession:_responseTimeout()
   if self._respTimeout then
     return self._respTimeout
@@ -244,15 +247,17 @@ function CRSFSession:_onEntry(data)
   end
   local now = getTime()
   if not buffer then
-    -- Chunk consumed: hurry the follow-up read, which carries the updated
-    -- chunk index. A refresh slot answering mid-entry burns no attempt.
-    if self._loadQueue[#self._loadQueue] == fieldId then
+    -- Chunk consumed: hurry the follow-up request, which carries the updated
+    -- chunk index. The device serves the rest of a command answer only on
+    -- our CMD_QUERY, so the active command comes first. A refresh slot
+    -- answering mid-entry burns no attempt.
+    if self.command and self.command.id == fieldId then
+      self._nextQueryAt = 0
+    elseif self._loadQueue[#self._loadQueue] == fieldId then
       self._nextReadAt = 0
     elseif self._refreshId == fieldId then
       self._refreshAt = now
       self._refreshLeft = self._refreshAttempts
-    elseif self.command then
-      self._nextQueryAt = now + (self.command.timeout or 100)
     end
     return
   end
@@ -305,6 +310,7 @@ function CRSFSession:_onEntry(data)
       -- browsing must not trigger either.
       self:_reloadRelated(field)
       self.command = nil
+      self._pendingFrame = nil
     end
 
     -- Auto-queue children for the root folder and during preloading -- but
@@ -327,16 +333,16 @@ function CRSFSession:_onEntry(data)
     end
   end
 
+  -- A completed command answer restarts the keep-alive cadence (and clears
+  -- the hurry one of its chunks left behind)
+  if self.command then
+    self._nextQueryAt = now + (self.command.timeout or 100)
+  end
   if self._loadQueue[1] then
     self._nextReadAt = 0
-  else
-    if self.command then
-      self._nextQueryAt = now + (self.command.timeout or 100)
-    end
-    if self._preloadArmed and self:isFolderLoaded(nil) then
-      self._preloadArmed = nil
-      self:preloadAll()
-    end
+  elseif self._preloadArmed and self:isFolderLoaded(nil) then
+    self._preloadArmed = nil
+    self:preloadAll()
   end
 end
 
@@ -565,32 +571,63 @@ end
 -- Commands
 -- ============================================================================
 
---- Click a command field. When the device accepts, session.command holds the
--- field until it reports CMD_IDLE (or the command is cancelled); the UI
--- renders its popup from session.command.status/info.
-function CRSFSession:execCommand(field)
-  self:reloadField(field)
-  if field.status ~= nil and field.status < crsf.CONST.CMD_CONFIRMED then
-    field.status = crsf.CONST.CMD_CLICK
-    crsf.push(params.encodeCommandStep(self.deviceId, self.handsetId, field.id, crsf.CONST.CMD_CLICK))
-    self.command = field
-    self._nextQueryAt = getTime() + (field.timeout or 100)
+-- Push one command step. The radio has a single outbound slot for Lua
+-- frames, freed once per module period, so a push right after tick()'s own
+-- frame is refused: park the payload and let tick() retry it next cycle. A
+-- newer step replaces a still-parked one (a cancel over an unsent click).
+function CRSFSession:_sendStep(fieldId, step)
+  local frameType, payload = params.encodeCommandStep(self.deviceId, self.handsetId, fieldId, step)
+  if crsf.push(frameType, payload) then
+    self._pendingFrame = nil
+    self:_onStepSent(step)
+  else
+    self._pendingFrame = payload
   end
+end
+
+-- Chunk bookkeeping once a step is on the wire. CLICK/CONFIRMED/CANCEL make
+-- the device answer from chunk 0 (sendCommandResponse resets its
+-- nextStatusChunk), and so does a QUERY at rest, which must also clear
+-- rx.done: a one-chunk CMD_IDLE after a two-chunk CMD_EXECUTING would
+-- otherwise be swallowed as a trailing duplicate. A QUERY mid-entry fetches
+-- the next chunk and keeps the buffer.
+function CRSFSession:_onStepSent(step)
+  if step ~= crsf.CONST.CMD_QUERY or self.rx.chunk == 0 then
+    params.resetChunks(self.rx)
+  end
+end
+
+--- Click a command field. session.command holds the field until the device
+-- reports CMD_IDLE (or the command is cancelled); the UI renders its popup
+-- from session.command.status/info, and session.commandAt dates the click.
+-- The live popup is the re-entrancy guard -- the field's own status is not
+-- consulted, as a cancel leaves it wherever the dialog last saw it.
+function CRSFSession:execCommand(field)
+  if self.command or field.status == nil then
+    return
+  end
+  field.status = crsf.CONST.CMD_CLICK
+  self.command = field
+  self.commandAt = getTime()
+  self:_sendStep(field.id, crsf.CONST.CMD_CLICK)
+  -- A lost answer is re-queried soon (never re-clicked: that would run Bind
+  -- or Send VTx twice); the field's own timeout takes over once one arrived
+  self._nextQueryAt = self.commandAt + self:_responseTimeout()
 end
 
 --- Answer the device's CMD_ASKCONFIRM.
 function CRSFSession:confirmCommand()
   if self.command then
-    crsf.push(params.encodeCommandStep(self.deviceId, self.handsetId, self.command.id, crsf.CONST.CMD_CONFIRMED))
-    self._nextQueryAt = getTime() + (self.command.timeout or 100)
     self.command.status = crsf.CONST.CMD_CONFIRMED
+    self:_sendStep(self.command.id, crsf.CONST.CMD_CONFIRMED)
+    self._nextQueryAt = getTime() + self:_responseTimeout()
   end
 end
 
 --- Cancel and dismiss: sends CMD_CANCEL and drops the popup immediately.
 function CRSFSession:cancelCommand()
   if self.command then
-    crsf.push(params.encodeCommandStep(self.deviceId, self.handsetId, self.command.id, crsf.CONST.CMD_CANCEL))
+    self:_sendStep(self.command.id, crsf.CONST.CMD_CANCEL)
     self.command = nil
   end
 end
@@ -601,7 +638,7 @@ end
 -- CMD_CLICK), so the UI keeps tracking the device's actual command state.
 function CRSFSession:requestCancelCommand()
   if self.command then
-    crsf.push(params.encodeCommandStep(self.deviceId, self.handsetId, self.command.id, crsf.CONST.CMD_CANCEL))
+    self:_sendStep(self.command.id, crsf.CONST.CMD_CANCEL)
     self._nextQueryAt = getTime() + CANCEL_GRACE
   end
 end
@@ -622,10 +659,11 @@ end
 -- ============================================================================
 
 --- Send what is due. At most one parameter frame per call, strict priority:
--- command keep-alive > write drain > link-status > reads (refresh slot,
--- then load-queue head). While a command runs it owns the wire -- reads
--- starve by design, and the field data rides its CMD_QUERY answers.
--- Discovery pings sit outside that chain: they cost no parameter traffic.
+-- parked command step > command keep-alive > write drain > link-status >
+-- reads (refresh slot, then load-queue head). While a command runs it owns
+-- the wire -- reads starve by design, and the field data rides its CMD_QUERY
+-- answers. Discovery pings sit outside that chain: they cost no parameter
+-- traffic.
 function CRSFSession:tick()
   local now = getTime()
 
@@ -643,9 +681,21 @@ function CRSFSession:tick()
     end
   end
 
+  -- A step the radio refused last cycle goes first, live command or not: a
+  -- cancel must reach the device either way. The slot was busy, so nothing
+  -- else could have gone out this cycle anyway.
+  if self._pendingFrame then
+    if crsf.push(crsf.CONST.FRAMETYPE_PARAMETER_WRITE, self._pendingFrame) then
+      local step = self._pendingFrame[4]
+      self._pendingFrame = nil
+      self:_onStepSent(step)
+    end
+    return
+  end
+
   if self.command then
     if now > self._nextQueryAt and self.command.status ~= crsf.CONST.CMD_ASKCONFIRM then
-      crsf.push(params.encodeCommandStep(self.deviceId, self.handsetId, self.command.id, crsf.CONST.CMD_QUERY))
+      self:_sendStep(self.command.id, crsf.CONST.CMD_QUERY)
       self._nextQueryAt = now + (self.command.timeout or 100)
     end
     return

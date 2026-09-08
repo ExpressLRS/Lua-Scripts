@@ -618,7 +618,7 @@ local txDevice = {
       type = CRSF.COMMAND,
       name = "Send VTx",
       status = CRSF.CMD_IDLE,
-      timeout = 50,
+      timeout = 200,
       info = "",
     },
 
@@ -630,7 +630,7 @@ local txDevice = {
       type = CRSF.COMMAND,
       name = "Enable WiFi",
       status = CRSF.CMD_IDLE,
-      timeout = 50,
+      timeout = 200,
       info = "",
       persistent = true,
     }, -- runs until cancelled
@@ -640,7 +640,7 @@ local txDevice = {
       type = CRSF.COMMAND,
       name = "Enable Rx WiFi",
       status = CRSF.CMD_IDLE,
-      timeout = 50,
+      timeout = 200,
       info = "",
       persistent = true,
     }, -- runs until cancelled
@@ -652,7 +652,7 @@ local txDevice = {
       type = CRSF.COMMAND,
       name = "Bind",
       status = CRSF.CMD_IDLE,
-      timeout = 50,
+      timeout = 200,
       info = "",
       -- Emits a different status string on each CMD_QUERY poll so the UI can be
       -- checked for live status updates while a command is executing.
@@ -868,7 +868,7 @@ local rxDevice = {
       type = CRSF.COMMAND,
       name = "Detect Orientation",
       status = CRSF.CMD_IDLE,
-      timeout = 50,
+      timeout = 200,
       info = "",
       -- Progress steps make the executing popup observable before completion.
       progress = { "Detecting...", "Reading IMU..." },
@@ -897,7 +897,7 @@ local rxDevice = {
       type = CRSF.COMMAND,
       name = "Enter Bind Mode",
       status = CRSF.CMD_IDLE,
-      timeout = 50,
+      timeout = 200,
       info = "",
     },
 
@@ -1209,6 +1209,10 @@ end
 -- ============================================================================
 
 local commandStates = {} -- keyed by "deviceId:paramId"
+-- Continuation state of the last command response, per endpoint as
+-- CRSFEndpoint::nextStatusChunk: the chunk the next CMD_QUERY fetches, 0
+-- once the response was delivered in full. TX and RX are separate endpoints.
+local nextStatusChunk = {} -- keyed by device id
 
 local function getCommandKey(deviceId, paramId)
   return tostring(deviceId) .. ":" .. tostring(paramId)
@@ -1259,7 +1263,7 @@ local function handleCommandWrite(device, param, newStatus)
       state.queriesRemaining = state.queriesRemaining - 1
       if state.queriesRemaining <= 0 then
         state.status = CRSF.CMD_IDLE
-        state.info = "Complete"
+        state.info = ""
         -- Command finished naturally: apply any side effects (e.g. a command
         -- that updates a sibling value). Not run on CMD_CANCEL.
         if param.onComplete then
@@ -1334,7 +1338,9 @@ local function mockPush(command, data)
   end
 
   -- One line per pushed frame, so a scenario run's wire traffic can be counted
-  -- from the log (steady-state silence is an empty grep).
+  -- from the log (steady-state silence is an empty grep). arg is the step of
+  -- a command write and the chunk index of a read, so command timings can be
+  -- followed step by step.
   print(shim.tableConcat({
     "CRSFSIM push t=",
     getTime(),
@@ -1344,6 +1350,8 @@ local function mockPush(command, data)
     data and data[1] or "-",
     " field=",
     data and data[3] or "-",
+    " arg=",
+    data and data[4] or "-",
   }))
 
   if command == CRSF.FRAMETYPE_DEVICE_PING then
@@ -1430,11 +1438,25 @@ local function mockPush(command, data)
       if param then
         local t = bit32.band(param.type, 0x7F)
         if t == CRSF.COMMAND then
-          -- Command: handle state machine
-          handleCommandWrite(device, param, writeValue)
-          -- Queue the updated parameter entry as response
+          -- Command step, as CRSFEndpoint::parameterUpdateReq: a CMD_QUERY
+          -- while the previous response is still being delivered fetches its
+          -- next chunk without re-running the state machine; any other step,
+          -- and a query at rest, runs it and answers from chunk 0
+          -- (sendCommandResponse resets nextStatusChunk).
           local destAddr = data[2] or CRSF.ADDRESS_HANDSET
-          queuePush(CRSF.FRAMETYPE_PARAMETER_SETTINGS_ENTRY, encodeParameterEntry(device, param, 0, destAddr))
+          local chunk = nextStatusChunk[device.id] or 0
+          if writeValue ~= CRSF.CMD_QUERY or chunk == 0 then
+            handleCommandWrite(device, param, writeValue)
+            chunk = 0
+          end
+          local entry = encodeParameterEntry(device, param, chunk, destAddr)
+          -- entry[4] is ChunksRemain
+          if entry[4] == 0 then
+            nextStatusChunk[device.id] = 0
+          else
+            nextStatusChunk[device.id] = chunk + 1
+          end
+          queuePush(CRSF.FRAMETYPE_PARAMETER_SETTINGS_ENTRY, entry)
         else
           -- Value write: decode based on field type
           if t == CRSF.STRING then

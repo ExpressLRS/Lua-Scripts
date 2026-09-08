@@ -22,13 +22,13 @@ local UI = {
   uiBuilt = false,
   folderWasReady = false,
 
-  -- Warning/command state (LVGL-specific). cmdLastStatus remembers which
-  -- command status the current dialog was built for, so a status change
-  -- swaps the dialog exactly once.
+  -- Warning/command state (LVGL-specific). commandPage remembers which kind
+  -- of page (confirm or executing) the current dialog is, so the dialog is
+  -- swapped exactly once per kind change.
   warningDismissedAt = nil,
   warningDialog = nil,
   commandDialog = nil,
-  cmdLastStatus = nil,
+  commandPage = nil,
 }
 
 -- ============================================================================
@@ -425,6 +425,16 @@ end
 -- Command popup handling
 -- ============================================================================
 
+-- Two kinds of command page. CLICK, CONFIRMED and EXECUTING share the
+-- executing one -- its info getter switches the text in place -- so the page
+-- is rebuilt only when the kind changes, never on a status edge.
+local PAGE_CONFIRM = 1
+local PAGE_EXECUTING = 2
+-- Grace after a click before "Sending..." replaces the settings page
+-- (ticks): a healthy link answers within it and goes straight to the
+-- confirm dialog, with nothing flashing in between.
+local PENDING_PAGE_DELAY = 20
+
 local function onCommandCancel()
   session:cancelCommand()
   UI.commandDialog = nil
@@ -438,26 +448,36 @@ local function handleCommandPopup()
       UI.commandDialog = nil
       UI.invalidate()
     end
-    UI.cmdLastStatus = nil
+    UI.commandPage = nil
     return
   end
 
-  if command.status == crsf.CONST.CMD_ASKCONFIRM then
-    if not UI.commandDialog or UI.cmdLastStatus ~= crsf.CONST.CMD_ASKCONFIRM then
-      UI.commandDialog = CommandPage.showConfirm(command.name, function()
-        return command.info or ""
-      end, function()
-        session:confirmCommand()
-      end, onCommandCancel)
-    end
-  elseif command.status == crsf.CONST.CMD_EXECUTING then
-    if not UI.commandDialog or UI.cmdLastStatus ~= crsf.CONST.CMD_EXECUTING then
-      UI.commandDialog = CommandPage.showExecuting(command.name, function()
-        return command.info or ""
-      end, onCommandCancel)
-    end
+  local status = command.status
+  local kind = PAGE_EXECUTING
+  if status == crsf.CONST.CMD_ASKCONFIRM then
+    kind = PAGE_CONFIRM
+  elseif status == crsf.CONST.CMD_CLICK and getTime() - session.commandAt < PENDING_PAGE_DELAY then
+    return
   end
-  UI.cmdLastStatus = command.status
+  if kind == UI.commandPage then
+    return
+  end
+  UI.commandPage = kind
+
+  if kind == PAGE_CONFIRM then
+    UI.commandDialog = CommandPage.showConfirm(command.name, function()
+      return command.info or ""
+    end, function()
+      session:confirmCommand()
+    end, onCommandCancel)
+  else
+    UI.commandDialog = CommandPage.showExecuting(command.name, function()
+      if command.status == crsf.CONST.CMD_EXECUTING then
+        return command.info or ""
+      end
+      return "Sending..."
+    end, onCommandCancel)
+  end
 end
 
 -- ============================================================================

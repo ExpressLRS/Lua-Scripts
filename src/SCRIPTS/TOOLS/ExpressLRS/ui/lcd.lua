@@ -560,26 +560,26 @@ end
 -- Command popup rendering
 -- ============================================================================
 
+-- "Sending..." popup titles, one per spinner phase, precomputed: BW radios
+-- have no table.concat and the popup is redrawn every cycle.
+local SENDING_FRAMES = { "Sending... [|]", "Sending... [/]", "Sending... [-]", "Sending... [\\]" }
+-- Grace after a click before the "Sending..." popup appears (ticks): a
+-- healthy link answers within it and goes straight to the confirm popup.
+local PENDING_POPUP_DELAY = 20
+
 function UI.drawPopup(event)
   local command = session.command
-  if event == EVT_VIRTUAL_EXIT then
-    local status = command.status
-    if status ~= crsf.CONST.CMD_ASKCONFIRM and status ~= crsf.CONST.CMD_EXECUTING then
-      -- No dialog is on screen yet (e.g. CMD_CLICK just went out): request the
-      -- cancel but keep the popup up until the device reports CMD_IDLE. The
-      -- dialog branches below handle their own cancel via popupConfirmation.
-      session:requestCancelCommand()
-    end
-  end
-
-  if command.status == crsf.CONST.CMD_ASKCONFIRM then
+  local status = command.status
+  if status == crsf.CONST.CMD_ASKCONFIRM then
     local result = popupConfirmation(command.info or "", "PRESS [OK] to confirm", event)
     if result == "OK" then
       session:confirmCommand()
     elseif result == "CANCEL" then
+      -- Nothing else forces the next frame once the popup is dropped
       session:cancelCommand()
+      UI.invalidate()
     end
-  elseif command.status == crsf.CONST.CMD_EXECUTING then
+  elseif status == crsf.CONST.CMD_EXECUTING then
     if not session:isReceivingChunks() then
       UI.commandRunningIndicator = (UI.commandRunningIndicator % 4) + 1
     end
@@ -590,6 +590,22 @@ function UI.drawPopup(event)
     )
     if result == "CANCEL" then
       session:cancelCommand()
+      UI.invalidate()
+    end
+  else
+    -- CMD_CLICK or CMD_CONFIRMED: the step is out and the device has not
+    -- answered yet. No dialog owns the keys, so EXIT requests the cancel
+    -- while the popup keeps tracking the device until it reports CMD_IDLE.
+    -- Past the grace, show that something is happening; the result is not
+    -- needed (EXIT is handled here, ENTER means nothing).
+    if event == EVT_VIRTUAL_EXIT then
+      session:requestCancelCommand()
+    end
+    if getTime() - session.commandAt >= PENDING_POPUP_DELAY then
+      if not session:isReceivingChunks() then
+        UI.commandRunningIndicator = (UI.commandRunningIndicator % 4) + 1
+      end
+      popupConfirmation(SENDING_FRAMES[UI.commandRunningIndicator], "Press [RTN] to cancel", event)
     end
   end
 end

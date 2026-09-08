@@ -89,7 +89,7 @@ The tools build on the shared `SCRIPTS/ELRS/` library, which the widgets use too
 |--------|---------|
 | `SCRIPTS/ELRS/crsf.lua` | CRSF constants, telemetry transport (`pop`/`drain`/`push`), module detection, derived link state (`hasTelemetry`, refreshed as a drain empties the queue), stateless frame decoders (`decodeDeviceInfo`, `decodeElrsStatus`, `isElrsV1Frame`) |
 | `SCRIPTS/ELRS/crsf_params.lua` | Opt-in parameter codec: `PARAMETER_SETTINGS_ENTRY` chunk reassembly over a caller-owned rx table and per-type decode, plus encoders that return `PARAMETER_READ`/`WRITE`, command-step and suppress-critical-errors frames for the caller to push. Loaded by the tool and the VTX Admin widget |
-| `SCRIPTS/ELRS/crsf_session.lua` | Opt-in stateful parameter client (`CRSFSession.new`, multi-instance): field store, load queue and retry scheduler, paced write queue, command state machine, and optional device discovery, link status and ELRS 1.x detection. Loaded by the tool and the VTX Admin widget |
+| `SCRIPTS/ELRS/crsf_session.lua` | Opt-in stateful parameter client (`CRSFSession.new`, multi-instance): field store, load queue and retry scheduler, paced write queue, command state machine (one step in flight, retried when the radio's single output slot refuses it), and optional device discovery, link status and ELRS 1.x detection. Loaded by the tool and the VTX Admin widget |
 | `SCRIPTS/ELRS/msp.lua` | Opt-in MSP-over-CRSF codec: stateless encoders returning `(frameType, payload)` for `MSP_REQ`/`MSP_WRITE` and decoders for single-frame v1 `MSP_RESP`, plus the ELRS `RXTX_CONFIG` UID/phrase helpers. Loaded only by the bind tool |
 | `SCRIPTS/ELRS/defer.lua` | Single-slot `setTimeout`/`poll` timer; scheduling replaces the pending callback, which is what cancels a stale retry when a new action starts. Loaded only by the bind tool |
 | `SCRIPTS/ELRS/ui/lcd/text_edit.lua` | BW text editor replicating the firmware's `editName()` model-name semantics (rotary cycles the char, ENTER advances, long ENTER toggles case or commits on a space). Loaded only by the bind tool's BW UI. `ui/<display>/` is the library's home for shared UI components, mirroring the tools' own `ui/` split |
@@ -162,3 +162,7 @@ bind/unbind requests are log-only.
 link carries. Parameter entries longer than `maxPacketBytes - 8` are chunked exactly as
 `CRSFEndpoint::sendParameter` does, so lowering it -- real firmware shrinks it on slow baud rates in
 `CRSFHandset::adjustMaxPacketSize` -- exercises chunk reassembly and the follow-up reads.
+Command-step answers chunk the same way and, as in `CRSFEndpoint::parameterUpdateReq`, only a
+`CMD_QUERY` fetches the continuation chunks; the state machine is not re-run for them.
+`maxPacketBytes = 35` reproduces the 27-byte chunk of a 400K link at 500 Hz, where a confirm prompt
+or a running-status answer spans two chunks.
