@@ -135,10 +135,11 @@ end
 -- Interface: handleUnsupported
 -- ============================================================================
 
-function UI.handleUnsupported()
+-- oldVersion set means an ELRS module below the minimum; nil means 1.x.
+function UI.handleUnsupported(oldVersion)
   drawAlert("Unsupported Firmware", {
-    "ELRS 1.x firmware detected.",
-    "Please update to 3.x.",
+    oldVersion and ("ELRS " .. oldVersion .. " detected.") or "ELRS 1.x firmware detected.",
+    oldVersion and "Requires 3.5.4 or later." or "Please update to 3.x.",
   })
 end
 

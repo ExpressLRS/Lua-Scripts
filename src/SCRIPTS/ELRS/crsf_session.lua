@@ -68,6 +68,7 @@ function CRSFSession.new(opts)
     -- Read-and-clear flags for the app
     fieldHiddenChanged = nil,
     v1Detected = nil,
+    unsupportedElrs = nil, -- version string of an ELRS TX too old to browse
     -- Reassembly state (crsf_params.lua manages it; rx.chunk is readable)
     rx = { chunk = 0, expect = -1 },
 
@@ -188,6 +189,22 @@ function CRSFSession:_onFrame(command, data)
   end
 end
 
+-- The one home of the minimum ExpressLRS firmware: 3.5.4. Older modules
+-- predate the spec-compliant folders of ExpressLRS #3123 and cannot be
+-- browsed, so the session latches .unsupportedElrs instead of loading
+-- garbage (Lua-Scripts #11).
+local function elrsVersionOk(info)
+  if info.vMaj >= 4 then
+    return true
+  elseif info.vMaj == 3 and info.vMin > 5 then
+    return true
+  elseif info.vMaj == 3 and info.vMin == 5 and info.vRev >= 4 then
+    return true
+  end
+
+  return false
+end
+
 function CRSFSession:_onDeviceInfo(data)
   local info = crsf:decodeDeviceInfo(data)
   if not info then
@@ -202,6 +219,9 @@ function CRSFSession:_onDeviceInfo(data)
   device.name = info.name
   device.fieldCount = info.fieldCount
   device.isElrs = info.isElrs
+  if device.isElrs and device.id == crsf.CONST.ADDRESS_TX and not elrsVersionOk(info) then
+    self.unsupportedElrs = info.vMaj .. "." .. info.vMin .. "." .. info.vRev
+  end
   if self._onDeviceUpdate then
     self._onDeviceUpdate(device, isNew)
   end

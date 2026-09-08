@@ -54,6 +54,9 @@ local shim = loadScript("/SCRIPTS/CRSFSimulator/shim.lua")()
 --                    in minimized widgets, full-screen subtitle updates).
 --   "no_module"      No CRSF module found at all. Triggers the "No Module
 --                    Found" error dialog immediately.
+--   "old_firmware"   TX reports ExpressLRS 3.4.2, below the tool's 3.5.4
+--                    minimum. Triggers the unsupported-firmware screen
+--                    instead of the parameter list.
 --   "critical_error" TX + RX connected but the module reports a critical
 --                    error (baud rate too low). Exercises the warning screen
 --                    and the suppress-critical-errors write (field id 0x2E),
@@ -498,7 +501,7 @@ local txDevice = {
   name = "TX16S MK3",
   serialNo = CRSF.ELRS_SERIAL_ID,
   hwVer = 0,
-  swVer = 0x00030500, -- 3.5.0
+  swVer = config.scenario == "old_firmware" and 0x00030402 or 0x00040100, -- 3.4.2 / 4.1.0
   fieldCount = 25, -- total parameter count
   params = {
     {
@@ -722,7 +725,7 @@ local rxDevice = {
   name = "Bob 2400RX",
   serialNo = CRSF.ELRS_SERIAL_ID,
   hwVer = 0,
-  swVer = 0x00030500, -- 3.5.0
+  swVer = 0x00040100, -- 4.1.0
   fieldCount = 25, -- total parameter count
   params = {
     {
